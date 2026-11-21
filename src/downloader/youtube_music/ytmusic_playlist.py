@@ -47,6 +47,15 @@ VERSION_RE = re.compile(
     r"karaoke|cover|acoustic|live|sad|duet|mashup|extended|rendition|reprised?|theme|bgm)\b",
     re.I,
 )
+# Not a performer: a date that YouTube put in the artist field, or a label / TV channel.
+DATE_RE = re.compile(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$")
+LABEL_RE = re.compile(
+    r"\b(records?|recordings|music|labels?|entertainment|productions?|studios?|tv|films?|media|"
+    r"saregama|t-series|tips|divo|lahari)\b",
+    re.I,
+)
+# One artist field can hold several names: "A & B", "A X B", "A feat. B", "Member (GROUP)".
+ARTIST_SEP_RE = re.compile(r",|&|/|\(|\)|\s+(?:and|x|feat\.?|ft\.?|with|y|e|و)\s+", re.I)
 LANG_RE = re.compile(r"\b(tamil|telugu|kannada|malayalam|hindi)\b", re.I)
 ALNUM_RE = re.compile(r"[\W_]+")
 MIN_SIMILARITY = 0.85
@@ -131,6 +140,32 @@ def is_match(video_title, wanted, found_title, found_artists=(), video_artists=(
     return not (want and got and want[0].lower() != got[0].lower())
 
 
+def performers(artists):
+    """Normalised performer names, without dates and labels: ['Jeyma Monica X Dini Kurnia'] -> ['jeymamonica', 'dinikurnia']"""
+    return [n for a in artists if not DATE_RE.match(a) and not LABEL_RE.search(a)
+            for n in map(norm, ARTIST_SEP_RE.split(a)) if len(n) >= 4]
+
+
+def same_artist(a, b):
+    """'bigass' / 'jengbigass', 'taylorswift' / 'taylorswiftvevo', 'fadelshaker' / 'fadlshaker'"""
+    return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= MIN_SIMILARITY
+
+
+def other_song(item, found):
+    """True when an official video's performers are not on the found song and the lengths differ by
+    more than 30 s: the same title by someone else ('Hong Kong' by The Weeknd vs by Sgija Keys).
+    Either alone is normal for the right song (composer-credited videos, long intros).
+    "Big Ass" = "Jeng Big Ass" and "XVEVO" = "X": a name inside the other counts as the same artist."""
+    if item.get("videoType") != "MUSIC_VIDEO_TYPE_OMV":
+        return False  # user uploads list the uploader's channel, not the performer
+    mine = performers(a["name"] for a in item.get("artists") or [] if a.get("name"))
+    theirs = performers(a["name"] for a in found.get("artists") or [] if a.get("name"))
+    if not mine or any(same_artist(a, b) for a in mine for b in theirs):
+        return False
+    a, b = item.get("duration_seconds"), found.get("duration_seconds")
+    return bool(a and b and abs(a - b) > 30)
+
+
 def clean_title(title):
     """Drop (From "Film") and soundtrack tags; keep language and version tags."""
     return " ".join(OST_RE.sub("", FROM_RE.sub("", title)).split())
@@ -199,7 +234,7 @@ def resolve(yt, item):
         for loose in passes:
             for r in pool:
                 found_artists = [a["name"] for a in r.get("artists") or [] if a.get("name")] if loose else ()
-                if is_match(title, name, r.get("title") or "", found_artists, video_artists):
+                if is_match(title, name, r.get("title") or "", found_artists, video_artists) and not other_song(item, r):
                     return r
     return None
 

@@ -6,7 +6,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ytmusic_playlist import candidates, clean_title, film_of, is_match, resolve, song_name, track_from  # noqa: E402
+from ytmusic_playlist import candidates, clean_title, film_of, is_match, performers, resolve, song_name, track_from  # noqa: E402
 
 failed = []
 
@@ -131,6 +131,41 @@ check(resolve(FakeYT({"COOLKID COOLKID": [song("Cool Kids", "Echosmith")],
 # a song named like its artist, with nothing else in the title, is still searched (real case, Korea chart)
 crush = song("CRUSH!", "CRUSH")
 check(resolve(FakeYT({"CRUSH! CRUSH": [crush]}), video("CRUSH!", "CRUSH")) == crush)
+
+# A2: an official video's artists don't appear on the found song AND the lengths differ by > 30 s: another song
+def timed(track, seconds):
+    return {**track, "duration_seconds": seconds}
+
+
+hong_kong = timed(video("Hong Kong", "The Weeknd"), 214)
+check(resolve(FakeYT({"Hong Kong The Weeknd": [timed(song("Hong Kong", "Sgija Keys"), 160)]}), hong_kong) is None)
+# either condition alone is normal for the right song: a composer-credited video, or a long intro
+check(resolve(FakeYT({"Hong Kong The Weeknd": [timed(song("Hong Kong", "Sgija Keys"), 200)]}), hong_kong) is not None)
+check(resolve(FakeYT({"Hong Kong The Weeknd": [timed(song("Hong Kong", "The Weeknd"), 160)]}), hong_kong) is not None)
+# the film part is searched first and finds a song named after the film; the song part then finds the right one
+jailer = timed(video("JAILER - Hukum Lyric Video | Superstar Rajinikanth", "Anirudh Ravichander"), 230)
+hukum = timed(song('Hukum - Thalaivar Alappara (From "Jailer")', "Anirudh Ravichander", "Super Subu"), 208)
+check(resolve(FakeYT({"JAILER Anirudh Ravichander": [timed(song("Jailer", "Elegie"), 150)],
+                      "Hukum Anirudh Ravichander": [hukum]}), jailer) == hukum)
+# D1: a label or TV channel listed as the artist is not the song's artist
+bindaas = timed(video("Bindaas - Lyric Video | Jailer 2 | Superstar Rajinikanth | Sun TV", "Sun TV"), 260)
+check(resolve(FakeYT({"Bindaas Sun TV": [timed(song("Bindaas", "Anirudh Ravichander"), 190)]}), bindaas) is not None)
+# D2/D4: "X official", "X - Topic", "XVEVO", group members and combined names count as the same artist
+for listed, credited in [("ธีร์ ทีเร็กซ์ OFFICIAL", "ธีร์ ทีเร็กซ์"), ("Anirudh Ravichander - Topic", "Anirudh Ravichander"),
+                         ("TaylorSwiftVEVO", "Taylor Swift"), ("Jeng Big Ass", "Big Ass"),
+                         ("Jeyma Monica X Dini Kurnia", "Dini Kurnia"), ("CHAERYEONG (ITZY)", "ITZY"),
+                         ("Henrique & Juliano", "Juliano")]:
+    track = timed(video("Mutiara", listed), 300)
+    check(resolve(FakeYT({f"Mutiara {listed}": [timed(song("Mutiara", credited), 200)]}), track) is not None)
+# D3: a date stored as the artist (your Replay mix) is not a performer. It stays in the search: dropping it
+# reordered the results and "Daddy Mummy" (Villu) matched the Hindi remake from Bhaag Johnny.
+check(performers(["Aug 22, 2026", "Sun TV", "Sony Music South"]) == [])
+daddy = timed({**video("Daddy Mummy - 4K Video Song டாடி மம்மி  வீட்டில் இல்ல Villu | Vijay", "Oct 30, 2023"), "videoType": None}, 257)
+villu = timed(song("Daddy Mummy", "Devi Sri Prasad", "Mamta Mohandas"), 261)
+check(resolve(FakeYT({"Daddy Mummy Oct 30, 2023": [villu], "Daddy Mummy": [timed(song("DADDY MUMMY", "DEVI SRI PRASAD (DSP)", "MM MANASI"), 266), villu]}), daddy) == villu)
+# the same singer spelled differently is the same artist (real case: Fadel / Fadl Shaker, 32 s apart)
+akendni = timed(video("Akendni Maak", "Fadel Shaker"), 346)
+check(resolve(FakeYT({"Akendni Maak Fadel Shaker": [timed(song("Akendni Maak", "Fadl Shaker"), 314)]}), akendni) is not None)
 
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)
