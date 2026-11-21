@@ -26,10 +26,12 @@ STOP_RE = re.compile(
     rf"|(?<=[{INDIC}])\s*[-–—_]+\s*(?=[A-Za-z])|(?<=[A-Za-z])\s*[-–—_]+\s*(?=[{INDIC}])"
 )
 INDIC_RE = re.compile(f"[{INDIC}]")
-# Words that describe the upload, not the song.
+# Fan edits of the song: the official song is wanted instead, and never an edit.
+FAN_EDIT = r"slowed|reverb|sped ?up|speed ?(?:up|down)|nightcore|8d|bass ?boosted"
+# Words that describe the upload, not the song (fan-edit words too: search for the song itself).
 JUNK_RE = re.compile(
-    r"\b(official|lyric(al)?s?|full|video|audio|songs?|visuali[sz]er|promo|teaser|"
-    r"4k|8k|hd|uhd|latest)\b",
+    rf"\b(official|lyric(al)?s?|full|video|audio|songs?|visuali[sz]er|promo|teaser|"
+    rf"4k|8k|hd|uhd|latest|{FAN_EDIT})\b",
     re.I,
 )
 # Tamil words for "Tamil", "in Tamil", "song lyrics", "song", "lyrics", "video".
@@ -41,12 +43,19 @@ OST_RE = re.compile(
     r"\s*[(\[]\s*original\s+(?:motion\s+picture\s+soundtrack|background\s+score|score|soundtrack)\s*[)\]]",
     re.I,
 )
-# A different recording than the video: never accept these unless the video says so too.
+# A different recording than the video: accept one only when the video names the same version.
+# Chinese/Korean/Japanese words have no word boundaries: 伴奏 instrumental, 合唱 choir, 現場 live.
 VERSION_RE = re.compile(
-    r"\b(female|male|version|remix|reprise|unplugged|lo-?fi|slowed|reverb|instrumental|"
-    r"karaoke|cover|acoustic|live|sad|duet|mashup|extended|rendition|reprised?|theme|bgm)\b",
+    r"\b(?:female|male|version|remix|reprise|unplugged|lo-?fi|instrumental|karaoke|cover|acoustic|live|"
+    r"sad|duet|mashup|extended|rendition|reprised?|theme|bgm|ao vivo|en vivo|a ?cappella)\b"
+    r"|伴奏|合唱|現場|现场|리믹스|ライブ",
     re.I,
 )
+# The same version in other languages.
+SAME_VERSION = {"aovivo": "live", "envivo": "live", "現場": "live", "现场": "live", "ライブ": "live",
+                "伴奏": "instrumental", "리믹스": "remix"}
+FAN_RE = re.compile(rf"\b(?:{FAN_EDIT})\b", re.I)
+BRACKET_RE = re.compile(r"[(\[（【][^)\]）】]*[)\]）】]")
 # Not a performer: a date that YouTube put in the artist field, or a label / TV channel.
 DATE_RE = re.compile(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$")
 LABEL_RE = re.compile(
@@ -130,13 +139,25 @@ def same_name(wanted, found_title, found_artists, video_title, video_artists=())
     return difflib.SequenceMatcher(None, a, b).ratio() >= LOOSE_SIMILARITY or (len(a) >= 5 and b.startswith(a))
 
 
+def versions(text):
+    """{'lofi', 'live'} for 'Hukum (Lo-Fi) Ao Vivo'"""
+    words = {re.sub(r"[\s-]", "", m.group(0).lower()) for m in VERSION_RE.finditer(text)}
+    return {SAME_VERSION.get(w, w) for w in words}
+
+
 def is_match(video_title, wanted, found_title, found_artists=(), video_artists=()):
     """True when found_title is the same song as `wanted` (not a cover, remix, other song)."""
     if not same_name(wanted, found_title, found_artists, video_title, video_artists):
         return False
-    for word in VERSION_RE.findall(found_title):
-        if not re.search(rf"\b{re.escape(word)}\b", video_title, re.I):
-            return False
+    if FAN_RE.search(found_title):
+        return False
+    found = versions(found_title)
+    if not found <= versions(video_title):
+        return False
+    # The video's own version: its name and brackets only ("| Love Duet Melody" describes the upload).
+    # "(Full Version)" is the song itself.
+    if not versions(" ".join(BRACKET_RE.findall(video_title)) + " " + wanted) - {"version"} <= found:
+        return False
     # A Telugu video must not resolve to the Tamil audio (dubbed versions share names).
     want, got = LANG_RE.findall(video_title), LANG_RE.findall(found_title)
     return not (want and got and want[0].lower() != got[0].lower())

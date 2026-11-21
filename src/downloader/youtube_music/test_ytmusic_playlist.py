@@ -180,5 +180,32 @@ ling_song = song("如果我變成回憶（R&B版）", "藍琳Ling")
 check(resolve(FakeYT({"如果我变成回忆（R&B版） 藍琳Ling": [ling_song]}), ling) == ling_song)
 check(resolve(FakeYT({"FIRESTARTER Hebi": [original]}), video("K/DA - FIRESTARTER | Cover by Hebi", "Hebi")) is None)
 
+# A4: a version named in the video's brackets must be on the found song too (keep the remix/live video)
+check(not is_match("Yes! 東京 (Instrumental)", "Yes! 東京", "Yes! 東京"))
+check(not is_match("DIRANTAI (Live Dangdut Session)", "DIRANTAI", "Dirantai"))
+check(not is_match("Hukum (Remix) | Jailer", "Hukum", "Hukum"))
+check(is_match("Hukum (Live)", "Hukum", "Hukum (Live)"))
+check(is_match("Hukum (Full Version)", "Hukum", "Hukum"))  # "Full Version" is the song itself
+# words outside brackets describe the upload: "Love Duet Melody" must not reject Thoothu Valai
+check(is_match(thoothu, "Thoothu Valai", "Thuthu Valaielle", ["Mano, S Janaki"]))
+# A5: version words in other languages (real cases, chart Nov 2026)
+check(not is_match("甲乙丙丁 (伴奏)", "甲乙丙丁", "甲乙丙丁"))
+check(not is_match("幸福在歌唱", "幸福在歌唱", "幸福在歌唱 (合唱版)"))
+check(not is_match("Así fue", "Así fue", "Así fue (En Vivo)"))
+check(is_match("Así fue (En Vivo)", "Así fue", "Así fue (En Vivo)"))
+check(not is_match("Tudo Ok (Ao Vivo)", "Tudo Ok", "Tudo Ok"))
+# the same version in two languages is the same version (real case: "(Live)" video, "(Ao Vivo)" song)
+check(is_match("Aproveita Que Eu Tô Brigado (Live)", "Aproveita Que Eu Tô Brigado", "Aproveita Que Eu Tô Brigado (Ao Vivo)"))
+check(is_match("Flash (Ao Vivo)", "Flash", "Flash (Live)"))
+# fan edits (8D, slowed, sped up, nightcore, bass boosted) are swapped for the official song, never matched to an edit
+check(candidates("Hukum 8D Audio | Use Headphones") == ["Hukum", "Use Headphones"])
+check(candidates("Hukum Slowed Reverb") == ["Hukum"])
+check(candidates("Hukum Sped Up") == ["Hukum"])
+check(is_match("Hukum (Slowed + Reverb)", "Hukum", "Hukum"))
+check(not is_match("Hukum (Slowed + Reverb)", "Hukum", "Hukum (Slowed + Reverb)"))
+check(not is_match("Лампочки", "Лампочки", "Лампочки (Speed Down)"))
+check(not is_match("Hukum Nightcore", "Hukum", "Hukum (Nightcore)"))
+check(not is_match("Hukum (Lofi)", "Hukum", "Hukum"))  # a lofi version is its own release, not a fan edit
+
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)
