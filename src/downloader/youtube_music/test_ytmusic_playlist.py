@@ -123,5 +123,14 @@ check("Power" not in candidates(power))
 check(candidates("தூது_வளை_Thoothu_Valai") == ["Thoothu_Valai", "தூது_வளை"])
 check(candidates("ஏக் தோ தீன் Ek Do Teen") == ["ஏக் தோ தீன் Ek Do Teen"])
 
+# A1: the part of the title that is the listed artist is never searched as a song (real case, Vietnam chart)
+coolkid = video("COOLKID - QUÁ ĐỦ RỒI | Official MV", "COOLKID")
+qua_du_roi = song("Quá Đủ Rồi", "COOLKID")
+check(resolve(FakeYT({"COOLKID COOLKID": [song("Cool Kids", "Echosmith")],
+                      "QUÁ ĐỦ RỒI COOLKID": [qua_du_roi]}), coolkid) == qua_du_roi)
+# a song named like its artist, with nothing else in the title, is still searched (real case, Korea chart)
+crush = song("CRUSH!", "CRUSH")
+check(resolve(FakeYT({"CRUSH! CRUSH": [crush]}), video("CRUSH!", "CRUSH")) == crush)
+
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)

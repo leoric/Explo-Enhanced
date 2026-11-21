@@ -180,7 +180,11 @@ def resolve(yt, item):
     video_artists = [a["name"] for a in artists if a.get("name")]
     # UGC uploads list the channel (e.g. "Sun TV") as artist; that only confuses search.
     artist = artists[0]["name"] if artists and item.get("videoType") != "MUSIC_VIDEO_TYPE_UGC" else ""
-    for i, name in enumerate(candidates(title)):
+    # "COOLKID - Song": the artist's own name is not a song name to search for.
+    listed = {norm(a) for a in video_artists}
+    names = candidates(title)
+    names = [n for n in names if norm(n) not in listed] or names
+    for i, name in enumerate(names):
         try:
             results = yt.search(f"{name} {artist}".strip(), filter="songs", limit=5)
         except Exception as e:  # one failed lookup must not fail the whole playlist
