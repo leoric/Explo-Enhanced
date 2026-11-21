@@ -285,10 +285,17 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult,
 	var opts ffmpeg.KwArgs
 	var streams []*ffmpeg.Stream
 	streams = append(streams, ffmpeg.Input(input))
-	if c.Cfg.EmbedCoverArt && track.CoverURL != "" {
-		if track.CoverPath == "" {
-			_, track.CoverPath = util.DownloadCover(track.CoverURL, c.Cfg.CoversDir)
-		}
+	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && track.CoverPath == "" {
+		_, track.CoverPath = util.DownloadCover(track.CoverURL, c.Cfg.CoversDir)
+	}
+	// ffmpeg can't embed a picture in Ogg/Opus (trac #4448): the whole save would fail.
+	// Navidrome reads cover.jpg from the album folder first, so put it there instead.
+	ext := strings.ToLower(filepath.Ext(outputPath))
+	oggContainer := ext == ".opus" || ext == ".ogg"
+	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && oggContainer {
+		writeFolderCover(track.CoverPath, filepath.Dir(outputPath), c.DownloadDir)
+	}
+	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && !oggContainer {
 		streams = append(streams, ffmpeg.Input(track.CoverPath))
 		opts = ffmpeg.KwArgs{
 			"c:v":            "mjpeg",
@@ -314,6 +321,27 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult,
 	}
 
 	return true
+}
+
+// writeFolderCover copies the cover to <albumDir>/cover.jpg, keeping one that's already there.
+// Only for per-album folders (PATH_TEMPLATE): in the flat download dir one cover.jpg would
+// become the art of every song in it.
+func writeFolderCover(coverPath, albumDir, downloadDir string) {
+	if coverPath == "" || filepath.Clean(albumDir) == filepath.Clean(downloadDir) {
+		return
+	}
+	dest := filepath.Join(albumDir, "cover.jpg")
+	if _, err := os.Stat(dest); err == nil {
+		return
+	}
+	data, err := os.ReadFile(coverPath)
+	if err != nil {
+		slog.Warn("cover art not available", "path", coverPath, "err", err)
+		return
+	}
+	if err := os.WriteFile(dest, data, 0644); err != nil {
+		slog.Warn("failed writing folder cover", "path", dest, "err", err)
+	}
 }
 
 // filter out video ID
