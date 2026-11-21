@@ -117,6 +117,11 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 		CoverURL  string `json:"coverUrl,omitempty"`
 		CoverPath string `json:"coverPath,omitempty"`
 		InLibrary *bool  `json:"inLibrary,omitempty"`
+		// Read back by loadCustomTracks on the next run of a custom playlist.
+		MainArtist         string `json:"mainArtist,omitempty"`
+		MusicBrainzTrackID string `json:"mbTrackId,omitempty"`
+		VideoID            string `json:"videoId,omitempty"`
+		DurationMs         int    `json:"durationMs,omitempty"`
 	}
 	type cache struct {
 		Tracks []cachedTrack `json:"tracks"`
@@ -145,6 +150,10 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 			CoverURL:  t.CoverURL,
 			CoverPath: t.CoverPath,
 			InLibrary: inLibrary,
+			MainArtist:         t.MainArtist,
+			MusicBrainzTrackID: t.MusicBrainzTrackID,
+			VideoID:            t.VideoID,
+			DurationMs:         t.Duration,
 		}
 	}
 
