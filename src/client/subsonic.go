@@ -186,6 +186,23 @@ func (c *Subsonic) matchKeptVideo(track *models.Track, name string, songs []Sear
 			}
 		}
 	}
+	// Spelled differently ("Andangkaka" vs "Andangakka"), search can't find it: look at every song
+	// starting with the name's first letters.
+	if fields := strings.Fields(name); len(fields) > 0 && len([]rune(fields[0])) >= 4 {
+		songs, err := c.searchSongs(string([]rune(fields[0])[:4]), 100)
+		if err != nil {
+			return SearchResult{}, false, err
+		}
+		for _, try := range append([]string{name}, shorterNames(name)...) {
+			for _, r := range songs {
+				if keptVideoMatch(track, try, r) {
+					slog.Info("library already has this video's song, spelled differently",
+						"video", track.VideoTitle, "library", r.Title, "artist", r.Artist, "album", r.Album)
+					return r, true, nil
+				}
+			}
+		}
+	}
 	return SearchResult{}, false, nil
 }
 

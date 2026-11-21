@@ -356,6 +356,48 @@ var (
 
 const maxDroppedWords = 4
 
+// Spelling differences when Tamil etc. is written in English ("Andangkaka"/"Andangakka",
+// "Alagaro"/"Azhagaro"): the same list as the YouTube Music importer (ytmusic_playlist.py).
+var spellingRules = strings.NewReplacer("dh", "d", "th", "t", "zh", "l", "sh", "s", "w", "v", "ee", "i", "oo", "u")
+
+func spelled(s string) string {
+	var b strings.Builder
+	var last rune
+	for _, r := range util.NormalizeTitle(s) {
+		if r != last { // double letters count once
+			b.WriteRune(r)
+		}
+		last = r
+	}
+	return spellingRules.Replace(b.String())
+}
+
+// sameSpelling: the two titles are the same words spelled differently (85% alike after the rules).
+func sameSpelling(a, b string) bool {
+	x, y := []rune(spelled(a)), []rune(spelled(b))
+	if len(x) == 0 || len(y) == 0 {
+		return false
+	}
+	// Levenshtein distance
+	prev := make([]int, len(y)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(x); i++ {
+		cur := make([]int, len(y)+1)
+		cur[0] = i
+		for j := 1; j <= len(y); j++ {
+			cost := 1
+			if x[i-1] == y[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return float64(prev[len(y)]) <= 0.15*float64(max(len(x), len(y)))
+}
+
 func wordSet(s string) map[string]bool {
 	set := map[string]bool{}
 	for _, w := range strings.Fields(s) {
@@ -411,7 +453,8 @@ func versions(text string) map[string]bool {
 func keptVideoMatch(track *models.Track, name string, r SearchResult) bool {
 	full := strings.TrimSpace(track.CleanTitle)
 	dropped := words(strings.TrimPrefix(full, strings.TrimSpace(name)))
-	if track.VideoTitle == "" || (len(dropped) > 0 && track.NameIsSong) || util.NormalizeTitle(r.Title) != util.NormalizeTitle(name) {
+	exact := util.NormalizeTitle(r.Title) == util.NormalizeTitle(name)
+	if track.VideoTitle == "" || (len(dropped) > 0 && track.NameIsSong) || !(exact || sameSpelling(r.Title, name)) {
 		return false
 	}
 	// the video's own version (its name and brackets; "| Love Duet Melody" describes the upload)
@@ -464,6 +507,12 @@ func keptVideoMatch(track *models.Track, name string, r SearchResult) bool {
 		for _, part := range titlePartRe.Split(track.VideoTitle, -1)[1:] {
 			film = film || containsWords(album, words(part), 5)
 		}
+	}
+	if !exact { // spelled differently: only when the video names the singer, and one more proof
+		if !singer {
+			return false
+		}
+		needed = max(needed, 2)
 	}
 	proofs := 0
 	for _, p := range []bool{length, singer, film} {

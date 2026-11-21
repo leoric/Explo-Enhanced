@@ -152,6 +152,17 @@ func TestShortNameMatch(t *testing.T) {
 			"甲乙丙丁Strangers", lib("甲乙丙丁Strangers", "Li Jiawei", "甲乙丙丁Strangers", 199), false},
 		{"library has the extended mix", &models.Track{CleanTitle: "What If?", Artist: "Neptunica", VideoTitle: "What If?", VideoDuration: 400000},
 			"What If?", lib("What If? (Extended Mix)", "Neptunica", "What If?", 380), false},
+		// spelled differently (Tamil in English letters): the singer plus one more proof
+		{"spelling: singer + film", video("Andangkaka Kondakari", "Andangkaka Kondakari - 4K Video Song | Anniyan | Vikram | Harris Jayaraj", 339),
+			"Andangkaka", lib("Andangakka", "Harris Jayaraj, Jassie Gift", "Anniyan", 337), true},
+		{"spelling: zh/l, singer + film", video("Marutha Alagaro", "Marutha Alagaro | Sundara Purushan | K. S. Chithra", 290),
+			"Marutha Alagaro", lib("Marutha Azhagaro", "K.S. Chithra", "Sundara Purushan", 285), true},
+		{"spelling without the singer", video("Marutha Alagaro", "Marutha Alagaro | Sundara Purushan", 285),
+			"Marutha Alagaro", lib("Marutha Azhagaro", "K.S. Chithra", "Sundara Purushan", 285), false},
+		{"spelling, singer only: rain is not hill", video("Mazhai Varuthu", "Mazhai Varuthu | K. S. Chithra", 300),
+			"Mazhai Varuthu", lib("Malai Varuthu", "K.S. Chithra", "Other Film", 250), false},
+		{"not just similar", video("Kannamma", "Kannamma | Anirudh Ravichander | Kaala", 250),
+			"Kannamma", lib("Kanmani", "Anirudh Ravichander", "Kaala", 250), false},
 		{"both extended", &models.Track{CleanTitle: "Verappa Extended", Artist: "Sai Abhyankkar", VideoTitle: "Verappa Extended", VideoDuration: 250000},
 			"Verappa Extended", lib(`Verappa - Extended (From "Karuppu")`, "Sai Abhyankkar, Arivu", "Karuppu", 248), true},
 	}

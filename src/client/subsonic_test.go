@@ -52,3 +52,16 @@ func TestSearchSongsShorterName(t *testing.T) {
 	}
 }
 
+// Navidrome can't find "Andangakka" when asked for "Andangkaka": the first letters of the name find it.
+func TestSearchSongsSpelling(t *testing.T) {
+	andang := map[string]any{"id": "lib-andang", "title": "Andangakka", "artist": "Harris Jayaraj, Jassie Gift", "album": "Anniyan", "duration": 337, "path": "a/b.flac"}
+	c := fakeNavidrome(t, map[string][]map[string]any{"Anda": {andang}})
+	kept := &models.Track{CleanTitle: "Andangkaka Kondakari", Title: "Andangkaka Kondakari", Artist: "Some Channel",
+		VideoTitle: "Andangkaka Kondakari - 4K Video Song | Anniyan | Vikram | Harris Jayaraj", VideoDuration: 339000}
+	if err := c.SearchSongs([]*models.Track{kept}); err != nil {
+		t.Fatal(err)
+	}
+	if !kept.Present || kept.ID != "lib-andang" {
+		t.Error("a differently spelled library song should be found through the name's first letters")
+	}
+}
