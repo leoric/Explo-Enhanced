@@ -154,7 +154,8 @@ function CustomPlaylistsSection({
           No custom playlists yet. Import one from ListenBrainz, Apple Music, Spotify or YouTube Music.
         </p>
       ) : (
-        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 min-[720px]:grid-cols-4 gap-3 mt-3">
+        // One scrollable row from 420px up (stacked list on phones), so many imports don't push the tracklist away
+        <div className="[scrollbar-width:thin] [scrollbar-color:#3a3a3a_transparent] min-[420px]:pb-2 grid grid-cols-1 min-[420px]:grid-cols-none min-[420px]:grid-flow-col min-[420px]:auto-cols-[calc((100%-0.75rem)/2)] min-[720px]:auto-cols-[calc((100%-2.25rem)/4)] min-[420px]:overflow-x-auto min-[420px]:snap-x min-[420px]:snap-mandatory [&>*]:snap-start gap-3 mt-3">
           {customPlaylists.map((cp, i) => {
             if (!schedules[cp.id]) return null
             return (
