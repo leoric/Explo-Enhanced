@@ -252,5 +252,23 @@ check(resolve(FakeYT({"Kutty Pattas": [kutty]}), video("Kutty Pattas Music Video
 # the language check still reads the whole video title: a Hindi video never becomes the Kannada song
 check(not is_match("Ra Ra Rakkamma Hindi (Full Video Song)", "Ra Ra Rakkamma", "Ra Ra Rakkamma (Kannada)"))
 
+# YouTube throttles bursts (an empty reply): retry, or the song is silently kept as its video
+class Flaky(FakeYT):
+    def __init__(self, results, failures):
+        super().__init__(results)
+        self.failures = failures
+
+    def search(self, query, filter=None, limit=None):
+        if self.failures:
+            self.failures -= 1
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        return super().search(query, filter, limit)
+
+
+import ytmusic_playlist  # noqa: E402
+ytmusic_playlist.RETRY_WAIT = 0
+check(resolve(Flaky({"Kutty Pattas": [kutty]}, 2), video("Kutty Pattas Music Video | Ashwin")) == kutty)
+check(resolve(Flaky({"Kutty Pattas": [kutty]}, 9), video("Kutty Pattas Music Video | Ashwin")) is None)  # gives up
+
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)

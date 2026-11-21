@@ -13,6 +13,7 @@ import difflib
 import json
 import re
 import sys
+import time
 
 from ytmusicapi import YTMusic
 
@@ -256,6 +257,22 @@ def track_from(item, source):
     }
 
 
+RETRY_WAIT = 2  # seconds, doubled each retry
+
+
+def search(yt, query, tries=4):
+    """Song search, retried: YouTube answers bursts with an empty reply, and a failed search would
+    silently keep the song as its video (no album, maybe a duplicate of a library song)."""
+    for attempt in range(tries):
+        try:
+            return yt.search(query, filter="songs", limit=5)
+        except Exception as e:
+            if attempt == tries - 1:
+                print(f"search failed for {query!r}: {e}", file=sys.stderr)
+                return None
+            time.sleep(RETRY_WAIT * 2 ** attempt)
+
+
 def resolve(yt, item):
     """Return the official audio for a music/lyric video, or None."""
     title = item.get("title") or ""
@@ -270,10 +287,8 @@ def resolve(yt, item):
     names = candidates(title)
     names = [n for n in names if norm(n) not in listed] or names
     for i, name in enumerate(names):
-        try:
-            results = yt.search(f"{name} {artist}".strip(), filter="songs", limit=5)
-        except Exception as e:  # one failed lookup must not fail the whole playlist
-            print(f"search failed for {name!r}: {e}", file=sys.stderr)
+        results = search(yt, f"{name} {artist}".strip())
+        if results is None:  # one failed lookup must not fail the whole playlist
             return None
         indic = bool(INDIC_RE.search(name))
         # A Tamil-script name can't be compared letter by letter: trust only the top result.
