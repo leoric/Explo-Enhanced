@@ -142,6 +142,19 @@ func (c *Subsonic) SearchSongs(tracks []*models.Track) error {
 
 		songs := resp.SubsonicResponse.SearchResult3.Song
 
+		// Search matches every word, so "Hukum - Thalaivar Alappara" misses a library title "Hukum".
+		if base, _, found := strings.Cut(searchQuery, " - "); len(songs) == 0 && found && strings.TrimSpace(base) != "" {
+			slog.Debug("[subsonic] retrying search without subtitle", "query", base)
+			body, err = c.subsonicRequest(fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(strings.TrimSpace(base))))
+			if err != nil {
+				return err
+			}
+			if err := util.ParseResp(body, &resp); err != nil {
+				return err
+			}
+			songs = resp.SubsonicResponse.SearchResult3.Song
+		}
+
 		if len(songs) == 0 {
 			if track.MusicBrainzTrackID != "" {
 				slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)

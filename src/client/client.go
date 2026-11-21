@@ -37,6 +37,7 @@ type NormalisedTrack struct {
 	Duration int
 	MBTrackID string
 	MBReleaseTrackID string
+	Language string // "tamil", "telugu", … when the title or album says so
 }
 
 // Client manages interactions with the selected music system
@@ -263,7 +264,8 @@ func BestMatch(track *models.Track, results []SearchResult, minScore int) (Searc
 		File: filepath.Base(track.File),
 		Duration: track.Duration,
 		MBTrackID: track.MusicBrainzTrackID,
-		MBReleaseTrackID: track.MusicBrainzReleaseTrackID}
+		MBReleaseTrackID: track.MusicBrainzReleaseTrackID,
+		Language: util.Language(track.CleanTitle, track.Title, track.Album)}
 
 	for _, r := range results {
 		score := rankResult(nmTrack, r)
@@ -290,6 +292,10 @@ func rankResult(track NormalisedTrack, r SearchResult) int {
 
 	if (track.MBTrackID != "" && r.MBID == track.MBTrackID) || (track.MBReleaseTrackID != "" && r.MBID == track.MBReleaseTrackID) {
 		return definitiveMatchScore // definitive match
+	}
+	// Dubbed versions share a title: when both sides name a language and they differ, it's another song.
+	if lang := util.Language(r.Title, r.Album); track.Language != "" && lang != "" && lang != track.Language {
+		return 0
 	}
 	if track.CleanTitle == resultTitle {
 		score += 45
