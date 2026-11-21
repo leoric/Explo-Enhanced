@@ -182,24 +182,51 @@ func getTopic(cfg cfg.Youtube, videos Videos, track models.Track) string {
 	return ""
 }
 
-// gets video stream using yt-dlp
-func getVideo(ctx context.Context, c Youtube, videoID string) (*goutubedl.DownloadResult, error) {
+// gets the audio stream using yt-dlp, preferring the codec that fits TRACK_EXTENSION as-is;
+// copyAudio reports whether that's what was picked, so ffmpeg can copy instead of re-encoding.
+func getVideo(ctx context.Context, c Youtube, videoID string) (stream *goutubedl.DownloadResult, copyAudio bool, err error) {
 
 	result, err := goutubedl.New(ctx, videoID, c.gouTubeOpts)
 	if err != nil {
-		return nil, fmt.Errorf("could not create URL for video download (ID: %s): %w", videoID, err)
+		return nil, false, fmt.Errorf("could not create URL for video download (ID: %s): %w", videoID, err)
 	}
 
-	downloadResult, err := result.Download(ctx, "bestaudio")
+	codec := copyableCodec(c.Cfg.FileExtension)
+	filter := "bestaudio"
+	if codec != "" {
+		filter = fmt.Sprintf("bestaudio[acodec^=%s]/bestaudio", codec)
+	}
+	downloadResult, err := result.Download(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("could not download video: %w", err)
+		return nil, false, fmt.Errorf("could not download video: %w", err)
 	}
 
-	return downloadResult, nil
+	return downloadResult, codec != "" && hasAudio(result.Info.Formats, codec), nil
 
 }
 
-func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult) bool {
+// copyableCodec is the YouTube audio codec that goes into a file of this extension unchanged.
+func copyableCodec(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "opus", "ogg":
+		return "opus"
+	case "m4a":
+		return "mp4a" // AAC, e.g. "mp4a.40.2"
+	}
+	return ""
+}
+
+// hasAudio: is there an audio-only format of this codec, i.e. the one "bestaudio[acodec^=codec]" downloads.
+func hasAudio(formats []goutubedl.Format, codec string) bool {
+	for _, f := range formats {
+		if strings.HasPrefix(f.ACodec, codec) && (f.VCodec == "none" || f.VCodec == "") {
+			return true
+		}
+	}
+	return false
+}
+
+func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult, copyAudio bool) bool {
 
 	defer func() {
 		if err := stream.Close(); err != nil {
@@ -277,6 +304,9 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult)
 			"loglevel": "error",
 		}
 	}
+	if copyAudio { // already in the right codec: copy instead of re-encoding
+		opts["c:a"] = "copy"
+	}
 
 	if err := util.WriteMetadata(streams, c.Cfg.FfmpegPath, outputPath, opts); err != nil {
 		slog.Error("failed saving file", "err", err)
@@ -305,14 +335,14 @@ func (c *Youtube) gatherVideo(cfg cfg.Youtube, videos Videos, track models.Track
 }
 
 func fetchAndSaveVideo(ctx context.Context, cfg Youtube, track *models.Track) bool {
-	stream, err := getVideo(ctx, cfg, track.ID)
+	stream, copyAudio, err := getVideo(ctx, cfg, track.ID)
 	if err != nil {
 		slog.Error("failed getting stream for video", "trackID", track.ID, "err", err)
 		return false
 	}
 
 	if stream != nil {
-		return saveVideo(cfg, track, stream)
+		return saveVideo(cfg, track, stream, copyAudio)
 	}
 
 	slog.Error("stream was empty for video", "trackID", track.ID)
