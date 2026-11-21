@@ -238,14 +238,14 @@ def cover(item):
     return re.sub(r"=w\d+-h\d+", "=w544-h544", thumbs[-1]["url"])
 
 
-def track_from(item, source):
+def track_from(item, source, song_titles=()):
     artists = [a["name"] for a in item.get("artists") or [] if a.get("name")]
     album = (item.get("album") or {}).get("name") or ""
     title = item.get("title") or ""
     # Singles are released as 'Song (From "Film")': the film is the real album.
     album = film_of(title, album) or album
-    return {
-        "title": clean_title(title) if source != "video" else song_name(title) or title,
+    track = {
+        "title": clean_title(title) if source != "video" else (song_names(item) or [title])[0],
         "artist": ", ".join(artists),
         "mainArtist": artists[0] if artists else "",
         "album": clean_title(album),
@@ -255,6 +255,12 @@ def track_from(item, source):
         "coverUrl": cover(item),
         "source": source,
     }
+    if source == "video":
+        # For Explo's library check, which may retry this name without its last words.
+        track["videoTitle"] = title
+        track["videoDurationMs"] = (item.get("duration_seconds") or 0) * 1000
+        track["nameIsSong"] = norm(track["title"]) in song_titles
+    return track
 
 
 RETRY_WAIT = 2  # seconds, doubled each retry
@@ -273,23 +279,29 @@ def search(yt, query, tries=4):
             time.sleep(RETRY_WAIT * 2 ** attempt)
 
 
-def resolve(yt, item):
-    """Return the official audio for a music/lyric video, or None."""
+def song_names(item):
+    """The names a video's song may have, as searched. "COOLKID - Song": the artist's own name is not
+    a song name, unless it is the whole title ("CRUSH!" by CRUSH)."""
+    listed = {norm(a["name"]) for a in item.get("artists") or [] if a.get("name")}
+    names = candidates(item.get("title") or "")
+    return [n for n in names if norm(n) not in listed] or names
+
+
+def resolve(yt, item, song_titles=None):
+    """Return the official audio for a music/lyric video, or None.
+    song_titles, when given, collects the normalized titles of every song the searches returned."""
     title = item.get("title") or ""
     cover = bool(COVER_RE.search(title))
     artists = item.get("artists") or []
     video_artists = [a["name"] for a in artists if a.get("name")]
     # UGC uploads list the channel (e.g. "Sun TV") as artist; that only confuses search.
     artist = artists[0]["name"] if artists and item.get("videoType") != "MUSIC_VIDEO_TYPE_UGC" else ""
-    # "COOLKID - Song": the artist's own name is not a song name to search for, unless it is the
-    # whole title ("CRUSH!" by CRUSH).
-    listed = {norm(a) for a in video_artists}
-    names = candidates(title)
-    names = [n for n in names if norm(n) not in listed] or names
-    for i, name in enumerate(names):
+    for i, name in enumerate(song_names(item)):
         results = search(yt, f"{name} {artist}".strip())
         if results is None:  # one failed lookup must not fail the whole playlist
             return None
+        if song_titles is not None:
+            song_titles.update(norm(clean_title(r.get("title") or "")) for r in results)
         indic = bool(INDIC_RE.search(name))
         # A Tamil-script name can't be compared letter by letter: trust only the top result.
         pool = [r for r in (results[:1] if indic else results[:3]) if r.get("videoId")]
@@ -322,10 +334,11 @@ def main():
         if item.get("videoType") == "MUSIC_VIDEO_TYPE_ATV":
             track = track_from(item, "song")
         else:
-            found = resolve(yt, item)
+            song_titles = set()
+            found = resolve(yt, item, song_titles)
             if skipped(item, found):
                 continue
-            track = track_from(found, "resolved") if found else track_from(item, "video")
+            track = track_from(found, "resolved") if found else track_from(item, "video", song_titles)
         if track["videoId"] in seen:  # two uploads of the same song resolve to one videoId
             continue
         seen.add(track["videoId"])

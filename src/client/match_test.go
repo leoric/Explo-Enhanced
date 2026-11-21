@@ -62,6 +62,106 @@ func TestDubbedVersionsDoNotMatch(t *testing.T) {
 	}
 }
 
+// A kept video's name can carry extra words the library title doesn't have ("Kovai Gethu Anthem" vs
+// "Kovai Gethu"). A shorter name may match only with enough proof; a wrong "already have it" would
+// leave the playlist song missing, which is worse than downloading a duplicate.
+func TestShorterNames(t *testing.T) {
+	got := shorterNames("Kovai Gethu Anthem")
+	if len(got) != 2 || got[0] != "Kovai Gethu" || got[1] != "Kovai" {
+		t.Errorf("shorterNames = %q, want longest first", got)
+	}
+	if len(shorterNames("Taki")) != 0 {
+		t.Error("a one-word name has nothing to drop")
+	}
+	if got := shorterNames("A B C D E F G"); len(got) != 4 || got[3] != "A B C" {
+		t.Errorf("drop at most 4 words, got %q", got)
+	}
+}
+
+func TestShortNameMatch(t *testing.T) {
+	video := func(name, title string, seconds int) *models.Track {
+		return &models.Track{CleanTitle: name, Title: name, VideoTitle: title, VideoDuration: seconds * 1000}
+	}
+	lib := func(title, artist, album string, seconds int) SearchResult {
+		return SearchResult{Title: title, Artist: artist, Album: album, Duration: seconds}
+	}
+	cases := []struct {
+		name  string
+		track *models.Track
+		short string
+		lib   SearchResult
+		want  bool
+	}{
+		// known extra word + singer named in the video title: one proof is enough
+		{"Tamil + singer", video("Soppanasundari Tamil", "Soppanasundari Tamil Video | D. Imman | Vikram Prabhu", 270),
+			"Soppanasundari", lib(`Soppanasundari (From "Veera Sivaji")`, "D. Imman; Vaikom Vijayalakshmi", "Veera Sivaji", 263), true},
+		{"Anthem + singer", video("Kovai Gethu Anthem", "Kovai Gethu Anthem | The Times Of India | Hiphop Tamizha", 199),
+			"Kovai Gethu", lib("Kovai Gethu", "Hiphop Tamizha", "Kovai Gethu", 178), true},
+		{"Music + singer", video("Kutty Pattas Music", "Kutty Pattas Music Video | Ashwin | Reba John | Santhosh Dhayanidhi", 243),
+			"Kutty Pattas", lib("Kutty Pattas", "Santhosh Dhayanidhi, Rakshita Suresh", "Kutty Pattas", 240), true},
+		{"known word + same length", video("Kovai Gethu Anthem", "Kovai Gethu Anthem | The Times Of India", 179),
+			"Kovai Gethu", lib("Kovai Gethu", "Hiphop Tamizha", "Kovai Gethu", 178), true},
+		// unknown extra word: two proofs
+		{"unknown word, singer + film", video("Nagada Sang Dhol Baaje", "Nagada Sang Dhol Baaje | Ram-Leela | Shreya Ghoshal", 280),
+			"Nagada Sang Dhol", lib("Nagada Sang Dhol", "Shreya Ghoshal, Osman Mir", "Goliyon Ki Raasleela Ram-Leela", 274), true},
+		{"unknown word, singer + length", video("Thottu Thottu Pesum Sulthana", "Thottu Thottu Pesum Sulthana | Swarnalatha", 284),
+			"Thottu Thottu Pesum", lib("Thottu Thottu Pesum", "Pushpavanam Kuppusamy, Swarnalatha", "Ethirum Pudhirum", 286), true},
+		{"unknown word, singer only", video("Thottu Thottu Pesum Sulthana", "Thottu Thottu Pesum Sulthana | Swarnalatha", 300),
+			"Thottu Thottu Pesum", lib("Thottu Thottu Pesum", "Pushpavanam Kuppusamy, Swarnalatha", "Ethirum Pudhirum", 286), false},
+		// the full name is a real song of its own: never shortened
+		{"full name is a song", &models.Track{CleanTitle: "Kanne Kalaimaane", VideoTitle: "Kanne Kalaimaane | Yesudas | Moondram Pirai", VideoDuration: 260000, NameIsSong: true},
+			"Kanne", lib("Kanne", "K. J. Yesudas", "Other Film", 258), false},
+		// a short common word needs two proofs
+		{"short word, singer only", video("Kanne Kalaimaane", "Kanne Kalaimaane | Yesudas", 300),
+			"Kanne", lib("Kanne", "Yesudas", "Other Film", 250), false},
+		{"short word, singer + length", video("Mascara Pottu", "Mascara Pottu | Salim | Vijay Antony", 297),
+			"Mascara", lib("Mascara", "Supriya Joshi, Vijay Antony", "Salim", 297), true},
+		// a version word is never dropped: a remix or female version is not the original
+		{"remix", video("Kadhal Vaibogame Remix", "Kadhal vaibogame remix | S. Janaki", 249),
+			"Kadhal Vaibogame", lib("Kadhal Vaibogame", "S. Janaki", "Perumal", 249), false},
+		{"female version", video("Rathinamo Female Version", "Rathinamo Female Version | Saurav Srisan", 200),
+			"Rathinamo", lib("Rathinamo", "Saurav Srisan", "Rathinamo", 200), false},
+		// other safeguards
+		{"other language", video("Soppanasundari Telugu", "Soppanasundari Telugu Video | D. Imman", 263),
+			"Soppanasundari", lib("Soppanasundari (Tamil)", "D. Imman", "Veera Sivaji", 263), false},
+		{"library song much longer than the video", video("Kovai Gethu Anthem", "Kovai Gethu Anthem | Hiphop Tamizha", 110),
+			"Kovai Gethu", lib("Kovai Gethu", "Hiphop Tamizha", "Kovai Gethu", 178), false},
+		// a video edit can cut part of the song (real case: 283 s video, 300 s library song)
+		{"video shorter than the song", &models.Track{CleanTitle: "Koodamela Koodavechi /", Artist: "VANDANA SRINIVASH, Prasanna, Yugabharathi, V.V.Prasanna",
+			VideoTitle: "Koodamela Koodavechi 8K/4K Video Song | Rummy | D. Imman | Vijay Sethupathi | Iyshwarya Rajesh", VideoDuration: 283000},
+			"Koodamela Koodavechi /", lib("Koodamela Koodavechi", "D. Imman, VV Prassanna, Vandana Srinivasan, Yugabharathi", "Rummy", 300), true},
+		{"title must be exact", video("Kovai Gethu Anthem", "Kovai Gethu Anthem | Hiphop Tamizha", 199),
+			"Kovai Gethu", lib("Kovai Gethu Remix", "Hiphop Tamizha", "Kovai Gethu", 178), false},
+		{"artist is a whole word", video("Soppanasundari Tamil", "Soppanasundari Tamil Video | Manoj Kumar", 270),
+			"Soppanasundari", lib("Soppanasundari", "Mano", "Veera Sivaji", 250), false},
+		{"no proof", video("Soppanasundari Tamil", "Soppanasundari Tamil Video", 300),
+			"Soppanasundari", lib("Soppanasundari", "D. Imman", "Veera Sivaji", 263), false},
+		// the full name gets the same rule: same title alone is not proof (another artist's song)
+		{"full name + singer", video("Soppanasundari", "Soppanasundari Video | D. Imman | Vikram Prabhu", 270),
+			"Soppanasundari", lib("Soppanasundari", "D. Imman", "Veera Sivaji", 263), true},
+		{"full name, other artist", video("Pattampoochi", "Pattampoochi (feat. Suriya & Mamitha Baiju)", 230),
+			"Pattampoochi", lib("Pattampoochi", "Malgudi Shuba", "Yenna Paaru", 290), false},
+		{"listed artist is proof", &models.Track{CleanTitle: "Hong Kong", Artist: "The Weeknd", VideoTitle: "Hong Kong (feat. 王菲季候風)", VideoDuration: 214000},
+			"Hong Kong", lib("Hong Kong", "The Weeknd", "Hurry Up Tomorrow", 205), true},
+		{"other artist, same title", &models.Track{CleanTitle: "Hong Kong", Artist: "The Weeknd", VideoTitle: "Hong Kong (feat. 王菲季候風)", VideoDuration: 214000},
+			"Hong Kong", lib("Hong Kong", "Sgija Keys, M00tion", "Each Of Us", 160), false},
+		// versions must agree both ways: a live video is not the studio song you own, and back
+		{"live video", &models.Track{CleanTitle: "Lego House", Artist: "Ed Sheeran", VideoTitle: "Lego House (Live)", VideoDuration: 200000},
+			"Lego House", lib("Lego House", "Ed Sheeran", "+", 185), false},
+		{"instrumental video", &models.Track{CleanTitle: "甲乙丙丁Strangers", Artist: "Li Jiawei", VideoTitle: "甲乙丙丁Strangers (伴奏)", VideoDuration: 200000},
+			"甲乙丙丁Strangers", lib("甲乙丙丁Strangers", "Li Jiawei", "甲乙丙丁Strangers", 199), false},
+		{"library has the extended mix", &models.Track{CleanTitle: "What If?", Artist: "Neptunica", VideoTitle: "What If?", VideoDuration: 400000},
+			"What If?", lib("What If? (Extended Mix)", "Neptunica", "What If?", 380), false},
+		{"both extended", &models.Track{CleanTitle: "Verappa Extended", Artist: "Sai Abhyankkar", VideoTitle: "Verappa Extended", VideoDuration: 250000},
+			"Verappa Extended", lib(`Verappa - Extended (From "Karuppu")`, "Sai Abhyankkar, Arivu", "Karuppu", 248), true},
+	}
+	for _, c := range cases {
+		if got := keptVideoMatch(c.track, c.short, c.lib); got != c.want {
+			t.Errorf("%s: keptVideoMatch = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // A song with no album must not score album points against every library song: "" is "contained" in
 // any album name, which used to lift a title-only match (45) to the threshold (60).
 func TestEmptyAlbumScoresNothing(t *testing.T) {

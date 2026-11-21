@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"time"
 	"strings"
 
@@ -333,4 +336,140 @@ func rankResult(track NormalisedTrack, r SearchResult) int {
 		}
 }
 	return score
+}
+// A video kept as-is (no official audio found) has a song name guessed from its title, which can
+// carry extra words ("Kovai Gethu Anthem" vs the library's "Kovai Gethu"). keptVideoMatch accepts a
+// library song for that name, or a shorter one, only with proof, because a wrong "already have it"
+// leaves the playlist song missing, which is worse than a duplicate download.
+var (
+	// Words that describe the upload, not the song: dropping one needs one proof.
+	uploadWords = wordSet("tamil telugu hindi malayalam kannada anthem music song songs video lyric lyrics lyrical official audio full promo hd 4k 8k")
+	// Words that make it a different recording: video and library song must name the same ones.
+	versionWords = wordSet("female male remix reprise unplugged lofi instrumental karaoke cover acoustic live sad duet mashup extended rendition theme bgm slowed reverb nightcore 8d")
+	sameVersion  = map[string]string{"vivo": "live", "現場": "live", "现场": "live", "ライブ": "live", "伴奏": "instrumental", "리믹스": "remix"}
+	bracketRe    = regexp.MustCompile(`[(\[（【][^)\]）】]*[)\]）】]`)
+	languages    = wordSet("tamil telugu hindi malayalam kannada")
+	artistSepRe  = regexp.MustCompile(`(?i),|;|&|/|\s+(?:feat\.?|ft\.?|x|and|with)\s+`)
+	titlePartRe  = regexp.MustCompile(`[|｜]|\s[-–—]\s`)
+	nonWordRe    = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+)
+
+const maxDroppedWords = 4
+
+func wordSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		set[w] = true
+	}
+	return set
+}
+
+func words(s string) []string {
+	return strings.Fields(nonWordRe.ReplaceAllString(strings.ToLower(s), " "))
+}
+
+// containsWords reports whether needle appears as consecutive whole words in hay, and has at
+// least minLetters letters, so "Mano" is not found in "Manoj" and "A" proves nothing.
+func containsWords(hay, needle []string, minLetters int) bool {
+	if len(needle) == 0 || len(strings.Join(needle, "")) < minLetters {
+		return false
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if slices.Equal(hay[i:i+len(needle)], needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// shorterNames drops words from the end, longest name first: "Kovai Gethu Anthem" -> "Kovai Gethu", "Kovai".
+func shorterNames(name string) []string {
+	w := strings.Fields(name)
+	var out []string
+	for n := len(w) - 1; n >= 1 && len(w)-n <= maxDroppedWords; n-- {
+		out = append(out, strings.Join(w[:n], " "))
+	}
+	return out
+}
+
+// versions lists the version words in text: "Lego House (Live)" -> {live}.
+func versions(text string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range words(text) {
+		if v, ok := sameVersion[w]; ok {
+			w = v
+		}
+		if versionWords[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+// keptVideoMatch: is library song r the song of kept video track, searched as name (its song name,
+// or that name without its last words)?
+func keptVideoMatch(track *models.Track, name string, r SearchResult) bool {
+	full := strings.TrimSpace(track.CleanTitle)
+	dropped := words(strings.TrimPrefix(full, strings.TrimSpace(name)))
+	if track.VideoTitle == "" || (len(dropped) > 0 && track.NameIsSong) || util.NormalizeTitle(r.Title) != util.NormalizeTitle(name) {
+		return false
+	}
+	// the video's own version (its name and brackets; "| Love Duet Melody" describes the upload)
+	// must be the library song's version, both ways
+	video := versions(full + " " + strings.Join(bracketRe.FindAllString(track.VideoTitle, -1), " "))
+	if !maps.Equal(video, versions(r.Title)) {
+		return false
+	}
+	needed, videoLang := 1, util.Language(track.VideoTitle)
+	for _, w := range dropped {
+		if languages[w] {
+			videoLang = w
+		}
+		if !uploadWords[w] {
+			needed = 2
+		}
+	}
+	// a short common word ("Kanne", "Dil") is part of many song names
+	if sw := words(name); len(sw) == 1 && len(sw[0]) < 8 {
+		needed = 2
+	}
+	if lang := util.Language(r.Title, r.Album); videoLang != "" && lang != "" && lang != videoLang {
+		return false
+	}
+	videoSecs := track.VideoDuration / 1000
+	// A video edit can cut a verse (283 s video, 300 s song), but not a whole minute.
+	if videoSecs > 0 && r.Duration > videoSecs+60 {
+		return false
+	}
+
+	title := words(track.VideoTitle)
+	length := videoSecs > 0 && r.Duration > 0 && util.Abs(r.Duration-videoSecs) <= 3
+	listed := map[string]bool{}
+	for _, a := range artistSepRe.Split(track.Artist, -1) {
+		listed[strings.Join(words(a), " ")] = true
+	}
+	singer := false
+	for _, a := range artistSepRe.Split(strings.Join(append([]string{r.Artist}, r.Artists...), ","), -1) {
+		aw := words(a)
+		if containsWords(title, aw, 4) || (len(aw) > 0 && listed[strings.Join(aw, " ")]) {
+			singer = true
+			break
+		}
+	}
+	// the film: the library album named in the video title, or a title part naming the album.
+	// A single's album is the song name itself, which proves nothing.
+	film := false
+	if album := words(util.CleanSearchTitle(r.Album)); !slices.Equal(album, words(util.CleanSearchTitle(r.Title))) {
+		film = containsWords(title, album, 5)
+		for _, part := range titlePartRe.Split(track.VideoTitle, -1)[1:] {
+			film = film || containsWords(album, words(part), 5)
+		}
+	}
+	proofs := 0
+	for _, p := range []bool{length, singer, film} {
+		if p {
+			proofs++
+		}
+	}
+	return proofs >= needed
 }

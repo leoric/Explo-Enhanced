@@ -128,70 +128,37 @@ func (c *Subsonic) AddLibrary() error {
 func (c *Subsonic) SearchSongs(tracks []*models.Track) error {
 	for _, track := range tracks {
 		searchQuery := util.CleanSearchTitle(track.CleanTitle)
-		reqParam := fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(searchQuery))
-
-		body, err := c.subsonicRequest(reqParam)
+		songs, err := c.searchSongs(searchQuery, 0)
 		if err != nil {
 			return err
 		}
 
-		var resp SubResponse
-		if err := util.ParseResp(body, &resp); err != nil {
-			return err
-		}
-
-		songs := resp.SubsonicResponse.SearchResult3.Song
-
 		// Search matches every word, so "Hukum - Thalaivar Alappara" misses a library title "Hukum".
 		if base, _, found := strings.Cut(searchQuery, " - "); len(songs) == 0 && found && strings.TrimSpace(base) != "" {
 			slog.Debug("[subsonic] retrying search without subtitle", "query", base)
-			body, err = c.subsonicRequest(fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(strings.TrimSpace(base))))
-			if err != nil {
+			if songs, err = c.searchSongs(strings.TrimSpace(base), 0); err != nil {
 				return err
 			}
-			if err := util.ParseResp(body, &resp); err != nil {
+		}
+
+		if len(songs) == 0 && track.MusicBrainzTrackID != "" {
+			slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)
+			if songs, err = c.searchSongs(track.MusicBrainzTrackID, 0); err != nil {
 				return err
 			}
-			songs = resp.SubsonicResponse.SearchResult3.Song
 		}
 
-		if len(songs) == 0 {
-			if track.MusicBrainzTrackID != "" {
-				slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)
-				reqParam = fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(track.MusicBrainzTrackID))
-				body, err = c.subsonicRequest(reqParam)
-				if err != nil {
-					return err
-				}
-
-				if err := util.ParseResp(body, &resp); err != nil {
-					return err
-				}
-
-				songs = resp.SubsonicResponse.SearchResult3.Song
+		var trackMatch SearchResult
+		var ok bool
+		if track.VideoTitle != "" { // a kept video: its name is a guess, so it needs proof
+			if trackMatch, ok, err = c.matchKeptVideo(track, searchQuery, songs); err != nil {
+				return err
 			}
-
-			if len(songs) == 0 {
-				slog.Debug("no results returned for query", "query", searchQuery, "trackArtist", track.MainArtist, "trackAlbum", track.Album)
-				continue
-			}
+		} else {
+			trackMatch, ok = BestMatch(track, songs, c.Cfg.MatchScore)
 		}
-		
-		searchData := make([]SearchResult, 0, len(songs))
-		for _, song := range songs {
-			searchData = append(searchData, SearchResult{
-				ID: song.ID,
-				Title: song.Title,
-				Album: song.Album,
-				Artist: song.Artist,
-				Path: song.Path,
-				Duration: song.Duration,
-				MBID: song.MusicBrainzID,
-			})
-		}
-		trackMatch, ok := BestMatch(track, searchData, c.Cfg.MatchScore)
 		if !ok {
-			slog.Debug("failed to find match, no results returned above threshold score", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery)
+			slog.Debug("no library match", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery, "results", len(songs))
 			continue
 		}
 		track.ID = trackMatch.ID
@@ -199,6 +166,57 @@ func (c *Subsonic) SearchSongs(tracks []*models.Track) error {
 		slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
 	}
 	return nil
+}
+
+// matchKeptVideo checks a kept video's name against the songs found for it, then retries the name
+// without its last words ("Kovai Gethu Anthem" -> "Kovai Gethu"); see keptVideoMatch.
+func (c *Subsonic) matchKeptVideo(track *models.Track, name string, songs []SearchResult) (SearchResult, bool, error) {
+	for i, try := range append([]string{name}, shorterNames(name)...) {
+		if i > 0 {
+			var err error
+			if songs, err = c.searchSongs(try, 50); err != nil { // a shorter name is more common: look further
+				return SearchResult{}, false, err
+			}
+		}
+		for _, r := range songs {
+			if keptVideoMatch(track, try, r) {
+				slog.Info("library already has this video's song",
+					"video", track.VideoTitle, "library", r.Title, "artist", r.Artist, "album", r.Album)
+				return r, true, nil
+			}
+		}
+	}
+	return SearchResult{}, false, nil
+}
+
+// searchSongs runs a Subsonic search3; count 0 keeps the server's default (20).
+func (c *Subsonic) searchSongs(query string, count int) ([]SearchResult, error) {
+	reqParam := fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(query))
+	if count > 0 {
+		reqParam += fmt.Sprintf("&songCount=%d&artistCount=0&albumCount=0", count)
+	}
+	body, err := c.subsonicRequest(reqParam)
+	if err != nil {
+		return nil, err
+	}
+	var resp SubResponse
+	if err := util.ParseResp(body, &resp); err != nil {
+		return nil, err
+	}
+	songs := resp.SubsonicResponse.SearchResult3.Song
+	out := make([]SearchResult, 0, len(songs))
+	for _, song := range songs {
+		out = append(out, SearchResult{
+			ID:       song.ID,
+			Title:    song.Title,
+			Album:    song.Album,
+			Artist:   song.Artist,
+			Path:     song.Path,
+			Duration: song.Duration,
+			MBID:     song.MusicBrainzID,
+		})
+	}
+	return out, nil
 }
 
 func (c *Subsonic) RefreshLibrary() error {

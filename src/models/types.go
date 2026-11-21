@@ -8,6 +8,9 @@ type Track struct {
 	AlbumArtist               string
 	ID                        string
 	VideoID                   string // YouTube videoId from a YouTube Music playlist: download exactly this, skip searching
+	VideoTitle                string // a video kept as-is (no official audio found): its full title, for library matching
+	VideoDuration             int    // that video's length in milliseconds (Duration stays 0: intros make it unreliable)
+	NameIsSong                bool   // the video's song name is itself an official song title, so never shorten it
 	Artist                    string // All artists as returned by LB
 	Artists                   []string
 	MainArtist                string

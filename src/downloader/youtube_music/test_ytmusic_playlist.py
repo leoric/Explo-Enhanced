@@ -252,6 +252,25 @@ check(resolve(FakeYT({"Kutty Pattas": [kutty]}), video("Kutty Pattas Music Video
 # the language check still reads the whole video title: a Hindi video never becomes the Kannada song
 check(not is_match("Ra Ra Rakkamma Hindi (Full Video Song)", "Ra Ra Rakkamma", "Ra Ra Rakkamma (Kannada)"))
 
+# A kept video tells Explo's library check its full title and length, and whether its name is a real
+# song of its own (then the library check must never shorten it: "Kanne Kalaimaane" is not "Kanne").
+kovai_video = {**timed(video("Kovai Gethu Anthem | The Times Of India"), 199), "videoId": "kv"}  # singer not named: kept
+seen = set()
+check(resolve(FakeYT({"Kovai Gethu Anthem": [song("Kovai Gethu", "Hiphop Tamizha")]}), kovai_video, seen) is None)
+kept = track_from(kovai_video, "video", seen)
+check(kept["title"] == "Kovai Gethu Anthem" and kept["videoTitle"] == kovai_video["title"])
+check(kept["videoDurationMs"] == 199000 and kept["durationMs"] == 0 and kept["nameIsSong"] is False)
+kanne_video = {**timed(video("Kanne Kalaimaane", "K. J. Yesudas"), 300), "videoId": "kn"}
+seen = set()
+check(resolve(FakeYT({"Kanne Kalaimaane K. J. Yesudas": [timed(song("Kanne Kalaimaane", "S. Janaki"), 250)]}), kanne_video, seen) is None)
+check(track_from(kanne_video, "video", seen)["nameIsSong"] is True)
+# official audio needs none of it
+check("videoTitle" not in track_from({**song("Kovai Gethu", "Hiphop Tamizha"), "duration_seconds": 178}, "resolved"))
+
+# a kept video's song name skips the artist's own name too, like the search does ("Crush - 삐그덕")
+check(track_from({**video("COOLKID - QUÁ ĐỦ RỒI | Official MV", "COOLKID"), "videoId": "c"}, "video")["title"] == "QUÁ ĐỦ RỒI")
+check(track_from({**video("CRUSH!", "CRUSH"), "videoId": "c"}, "video")["title"] == "CRUSH!")
+
 # YouTube throttles bursts (an empty reply): retry, or the song is silently kept as its video
 class Flaky(FakeYT):
     def __init__(self, results, failures):

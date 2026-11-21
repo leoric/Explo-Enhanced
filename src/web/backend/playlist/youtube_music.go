@@ -60,6 +60,9 @@ type ytMusicPlaylist struct {
 		Album           string `json:"album"`
 		DurationMs      int    `json:"durationMs"`
 		VideoID         string `json:"videoId"`
+		VideoTitle      string `json:"videoTitle"`
+		VideoDurationMs int    `json:"videoDurationMs"`
+		NameIsSong      bool   `json:"nameIsSong"`
 		CoverURL        string `json:"coverUrl"`
 		Source          string `json:"source"` // "song" | "resolved" | "video"
 	} `json:"tracks"`
@@ -104,6 +107,9 @@ func fetchYouTubeMusicPlaylist(pageURL string, limit int) (string, string, []Pla
 			CoverURL:        t.CoverURL,
 			VideoID:         t.VideoID,
 			DurationMs:      t.DurationMs,
+			VideoTitle:      t.VideoTitle,
+			VideoDurationMs: t.VideoDurationMs,
+			NameIsSong:      t.NameIsSong,
 		}
 	}
 	slog.Info("youtube music: parsed playlist", "name", pl.Name, "tracks", len(tracks),
