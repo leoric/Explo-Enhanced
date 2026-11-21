@@ -180,6 +180,9 @@ func main() {
 		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)
 		if err == nil {
 			cfg.ClientCfg.PlaylistName = playlistName
+			if cfg.DownloadCfg.UseSubDir { // folder named after the playlist instead of Custom-<id>
+				cfg.DownloadCfg.DownloadDir = filepath.Join(filepath.Dir(cfg.DownloadCfg.DownloadDir), util.CustomDirName(playlistName, cfg.Flags.Playlist))
+			}
 			hasMBIDs := func() bool {
 				for _, t := range tracks {
 					if t.MusicBrainzTrackID != "" {
@@ -209,7 +212,7 @@ func main() {
 	allTracks := append([]*models.Track(nil), tracks...)
 	if cfg.ServerCfg.WebDataDir != "" {
 		playlist.WritePlaylistCache(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist, allTracks, nil)
-		slog.Info("Saved playlist", "playlist", cfg.Flags.Playlist, "tracks", len(allTracks))
+		slog.Info("Saved playlist", "playlist", cfg.Flags.Playlist, "name", cfg.ClientCfg.PlaylistName, "tracks", len(allTracks), "folder", cfg.DownloadCfg.DownloadDir)
 	}
 
 	client, err := client.NewClient(&cfg)

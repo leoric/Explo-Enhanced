@@ -312,7 +312,14 @@ func (p *Playlist) HandleDeleteCustomPlaylist(w http.ResponseWriter, r *http.Req
 			env := p.settings.ParseEnvText(string(data))
 			if env["USE_SUBDIRECTORY"] == "true" && env["DOWNLOAD_DIR"] != "" {
 				prefix := cases.Title(language.Und).String(id) // "custom-1234" -> "Custom-1234"
-				removed, err := util.RemoveDirsByPrefix(env["DOWNLOAD_DIR"], prefix)
+				removed, err := util.RemoveDirsByPrefix(env["DOWNLOAD_DIR"], prefix) // folders from before CustomDirName
+				if dir := filepath.Join(env["DOWNLOAD_DIR"], util.CustomDirName(deletedName, id)); err == nil {
+					if _, statErr := os.Stat(dir); statErr == nil {
+						if err = os.RemoveAll(dir); err == nil {
+							removed++
+						}
+					}
+				}
 				if err != nil {
 					slog.Warn("custom-playlists: track cleanup failed", "id", id, "err", err)
 				} else {

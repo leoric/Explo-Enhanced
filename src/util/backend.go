@@ -9,6 +9,22 @@ import (
 	"explo/src/web/backend/app"
 )
 
+// CustomDirName is the download subfolder of an imported playlist: its name with characters that
+// are invalid in paths replaced, falling back to Custom-<id>.
+// ponytail: same-named playlists share a folder; they already share CUSTOM_<NAME>_* env keys.
+func CustomDirName(name, id string) string {
+	dir := strings.Trim(strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`/\:*?"<>|`, r) {
+			return '_'
+		}
+		return r
+	}, name), " .")
+	if dir == "" {
+		return "Custom-" + strings.TrimPrefix(id, "custom-")
+	}
+	return dir
+}
+
 // customEnvPrefix converts a playlist name like "Today's Hits"
 // to an env-var prefix like "CUSTOM_TODAYS_HITS".
 // Non-alphanumeric characters are collapsed into underscores.
