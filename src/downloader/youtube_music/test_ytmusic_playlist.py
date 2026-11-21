@@ -167,5 +167,18 @@ check(resolve(FakeYT({"Daddy Mummy Oct 30, 2023": [villu], "Daddy Mummy": [timed
 akendni = timed(video("Akendni Maak", "Fadel Shaker"), 346)
 check(resolve(FakeYT({"Akendni Maak Fadel Shaker": [timed(song("Akendni Maak", "Fadl Shaker"), 314)]}), akendni) is not None)
 
+# A3: a cover video stays the cover; it is not swapped for the original (real cases, chart Nov 2026)
+firestarter = video("K/DA - FIRESTARTER | Cover by Hebi")
+original = song("FIRESTARTER", "K/DA")
+check(resolve(FakeYT({"FIRESTARTER": [original], "Cover by Hebi": []}), firestarter) is None)
+korean = video("ChaeA - 너의 모든 순간 (원곡 : 성시경)")
+check(resolve(FakeYT({"너의 모든 순간": [song("너의 모든 순간", "성시경")]}), korean) is None)
+check(resolve(FakeYT({"Hukum": [hukum]}), video("Hukum | Discover Tamil")) == hukum)  # "Discover" is not "cover"
+# ...but the cover singer's own release of the cover is the right audio (real case, Taiwan chart)
+ling = video("如果我变成回忆（R&B版）｜蓝琳 Ling｜Tank经典情歌女声翻唱｜华语伤感抒情歌曲推荐", "藍琳Ling")
+ling_song = song("如果我變成回憶（R&B版）", "藍琳Ling")
+check(resolve(FakeYT({"如果我变成回忆（R&B版） 藍琳Ling": [ling_song]}), ling) == ling_song)
+check(resolve(FakeYT({"FIRESTARTER Hebi": [original]}), video("K/DA - FIRESTARTER | Cover by Hebi", "Hebi")) is None)
+
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)

@@ -56,6 +56,8 @@ LABEL_RE = re.compile(
 )
 # One artist field can hold several names: "A & B", "A X B", "A feat. B", "Member (GROUP)".
 ARTIST_SEP_RE = re.compile(r",|&|/|\(|\)|\s+(?:and|x|feat\.?|ft\.?|with|y|e|و)\s+", re.I)
+# A cover upload ("Cover by", Korean/Japanese/Chinese "original singer" / "cover"): keep the cover.
+COVER_RE = re.compile(r"\bcover(ed)?\b|원곡|カバー|翻唱", re.I)
 LANG_RE = re.compile(r"\b(tamil|telugu|kannada|malayalam|hindi)\b", re.I)
 ALNUM_RE = re.compile(r"[\W_]+")
 MIN_SIMILARITY = 0.85
@@ -151,6 +153,13 @@ def same_artist(a, b):
     return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= MIN_SIMILARITY
 
 
+def by_video_artist(item, found):
+    """True when the found song is by an artist listed on the video: a cover singer's own release of the cover."""
+    mine = performers(a["name"] for a in item.get("artists") or [] if a.get("name"))
+    theirs = performers(a["name"] for a in found.get("artists") or [] if a.get("name"))
+    return any(same_artist(a, b) for a in mine for b in theirs)
+
+
 def other_song(item, found):
     """True when an official video's performers are not on the found song and the lengths differ by
     more than 30 s: the same title by someone else ('Hong Kong' by The Weeknd vs by Sgija Keys).
@@ -211,6 +220,7 @@ def track_from(item, source):
 def resolve(yt, item):
     """Return the official audio for a music/lyric video, or None."""
     title = item.get("title") or ""
+    cover = bool(COVER_RE.search(title))
     artists = item.get("artists") or []
     video_artists = [a["name"] for a in artists if a.get("name")]
     # UGC uploads list the channel (e.g. "Sun TV") as artist; that only confuses search.
@@ -234,7 +244,8 @@ def resolve(yt, item):
         for loose in passes:
             for r in pool:
                 found_artists = [a["name"] for a in r.get("artists") or [] if a.get("name")] if loose else ()
-                if is_match(title, name, r.get("title") or "", found_artists, video_artists) and not other_song(item, r):
+                if is_match(title, name, r.get("title") or "", found_artists, video_artists) and not other_song(item, r) \
+                        and not (cover and not by_video_artist(item, r)):
                     return r
     return None
 
