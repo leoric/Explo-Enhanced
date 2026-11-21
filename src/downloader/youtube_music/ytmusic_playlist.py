@@ -19,10 +19,11 @@ from ytmusicapi import YTMusic
 # Indian scripts (Devanagari to Sinhala: Hindi, Tamil, Telugu, Kannada, Malayalam...).
 INDIC = "\u0900-\u0DFF"
 # The song name ends at the first of these: | ( [ { " # @ •, a dash with a space on either
-# side, or a switch between an Indian script and Latin ("தூது வளை-Thoothu Valai").
+# side, or a dash/underscore where an Indian script meets Latin ("தூது வளை-Thoothu Valai").
+# A plain space between scripts is not a cut: "वर्दी के Power" is one name.
 STOP_RE = re.compile(
     rf'\s[-–—]|[-–—]\s|[|｜(\[{{"“”#@•]'
-    rf"|(?<=[{INDIC}])[\s\-–—]*(?=[A-Za-z])|(?<=[A-Za-z])[\s\-–—]*(?=[{INDIC}])"
+    rf"|(?<=[{INDIC}])\s*[-–—_]+\s*(?=[A-Za-z])|(?<=[A-Za-z])\s*[-–—_]+\s*(?=[{INDIC}])"
 )
 INDIC_RE = re.compile(f"[{INDIC}]")
 # Words that describe the upload, not the song.

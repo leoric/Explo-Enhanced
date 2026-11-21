@@ -6,7 +6,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ytmusic_playlist import candidates, clean_title, film_of, is_match, resolve, song_name  # noqa: E402
+from ytmusic_playlist import candidates, clean_title, film_of, is_match, resolve, song_name, track_from  # noqa: E402
 
 failed = []
 
@@ -115,6 +115,13 @@ check(resolve(FakeYT({"சூர்யா Prasanna": [song("Anjala", "Harris Jay
 # a theme / background score is not the video's song (real case: Top Weekly, Nov 2026
 check(not is_match("Gatta Kusthi 2", "Gatta Kusthi 2", "Gatta Kusthi 2 Theme", ["Sean Roldan"], ["Sean Roldan"]))
 check(not is_match("Leo Video", "Leo", "Leo BGM", ["Anirudh Ravichander"], ["Anirudh Ravichander"]))
+
+# B10: a song name that mixes scripts stays whole; split at a script change only at a dash or underscore
+power = "#Video | वर्दी के Power | #Raushan Rohi , Srishti Bharti | Ft. Aparna Malik | Rangdari Son"
+check("वर्दी के Power" in candidates(power))
+check("Power" not in candidates(power))
+check(candidates("தூது_வளை_Thoothu_Valai") == ["Thoothu_Valai", "தூது_வளை"])
+check(candidates("ஏக் தோ தீன் Ek Do Teen") == ["ஏக் தோ தீன் Ek Do Teen"])
 
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)
