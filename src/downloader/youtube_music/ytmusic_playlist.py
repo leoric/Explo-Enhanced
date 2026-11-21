@@ -29,9 +29,14 @@ INDIC_RE = re.compile(f"[{INDIC}]")
 # Fan edits of the song: the official song is wanted instead, and never an edit.
 FAN_EDIT = r"slowed|reverb|sped ?up|speed ?(?:up|down)|nightcore|8d|bass ?boosted"
 # Words that describe the upload, not the song (fan-edit words too: search for the song itself).
+UPLOAD_WORDS = r"official|lyric(?:al)?s?|full|video|audio|songs?|visuali[sz]er|promo|teaser|4k|8k|hd|uhd|latest"
 JUNK_RE = re.compile(
-    rf"\b(official|lyric(al)?s?|full|video|audio|songs?|visuali[sz]er|promo|teaser|"
-    rf"4k|8k|hd|uhd|latest|{FAN_EDIT})\b",
+    rf"\b({UPLOAD_WORDS}|{FAN_EDIT}"
+    # "Kutty Pattas Music Video", "Soppanasundari Tamil Video", "Ra Ra Rakkamma Hindi (Full Video)":
+    # a language or "Music" names the upload only right before upload words or at the end.
+    rf"|music(?=\s+video)|(?:tamil|telugu|kannada|malayalam|hindi)(?=(?:\s+(?:{UPLOAD_WORDS})\b)|\s*$))\b"
+    # "Taki Taki ft. Selena Gomez, Ozuna": the featured artists are not the song name.
+    r"|\s(?:ft|feat|featuring)\.?\s.*",
     re.I,
 )
 # Tamil words for "Tamil", "in Tamil", "song lyrics", "song", "lyrics", "video".

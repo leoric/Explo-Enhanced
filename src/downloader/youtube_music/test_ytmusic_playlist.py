@@ -232,5 +232,25 @@ check(resolve(FakeYT({"AH, JESUS / CORAÇÃO IGUAL AO TEU Gabriela Rocha": [time
 long_intro = timed(video("MONEYMONEYMONEY", "Ghostface"), 521)  # under 10 minutes: an intro, not an album
 check(resolve(FakeYT({"MONEYMONEYMONEY Ghostface": [timed(song("MONEYMONEYMONEY", "Ghostface"), 140)]}), long_intro) is not None)
 
+# Filler words: "Music Video", a language before "Video"/"Song", and "ft. …" are not part of the song name
+# (real titles of songs that were downloaded again although the library had them)
+check(song_name("Soppanasundari Tamil Video | D. Imman | Vikram Prabhu") == "Soppanasundari")
+check(song_name("Kutty Pattas Music Video | Ashwin | Reba John | Santhosh Dhayanidhi") == "Kutty Pattas")
+check(song_name("Taki Taki ft. Selena Gomez, Ozuna, Cardi B (Official Music Video)") == "Taki Taki")
+check(song_name("Ra Ra Rakkamma Hindi (Full Video Song) | Vikrant Rona") == "Ra Ra Rakkamma")
+check(song_name("Veera Veera Lyrical (Telugu) | OM | Dhanush") == "Veera Veera")
+check(song_name("Mutta Kalakki feat. GV Prakash") == "Mutta Kalakki")
+# ...but only there: a language or "Music" elsewhere is part of the name
+check(song_name("Vanakkam Tamil Nadu | Hiphop Tamizha") == "Vanakkam Tamil Nadu")
+check(song_name("Music Killer - Dindigul Gethu") == "Music Killer")
+check(song_name("Feathers Of Love") == "Feathers Of Love")
+check(song_name("Left Right Tamil Song Mashup") == "Left Right Mashup")
+soppana = song('Soppanasundari (From "Veera Sivaji")', "D. Imman", "Vaikom Vijayalakshmi")
+check(resolve(FakeYT({"Soppanasundari": [soppana]}), video("Soppanasundari Tamil Video | D. Imman | Vikram Prabhu")) == soppana)
+kutty = song("Kutty Pattas", "Santhosh Dhayanidhi", "Rakshita Suresh")
+check(resolve(FakeYT({"Kutty Pattas": [kutty]}), video("Kutty Pattas Music Video | Ashwin | Reba John | Santhosh Dhayanidhi")) == kutty)
+# the language check still reads the whole video title: a Hindi video never becomes the Kannada song
+check(not is_match("Ra Ra Rakkamma Hindi (Full Video Song)", "Ra Ra Rakkamma", "Ra Ra Rakkamma (Kannada)"))
+
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)
