@@ -62,3 +62,16 @@ func TestDubbedVersionsDoNotMatch(t *testing.T) {
 	}
 }
 
+// A song with no album must not score album points against every library song: "" is "contained" in
+// any album name, which used to lift a title-only match (45) to the threshold (60).
+func TestEmptyAlbumScoresNothing(t *testing.T) {
+	track := &models.Track{CleanTitle: "Pattampoochi", MainArtist: "Sublahshini"}
+	other := SearchResult{Title: "Pattampoochi", Artist: "Malgudi Shuba", Album: "Yenna Paaru", Path: "a/b/Pattampoochi.flac"}
+	if m, ok := BestMatch(track, []SearchResult{other}, 60); ok {
+		t.Errorf("same title, other artist, no album: score %d must stay under 60", m.Score)
+	}
+	withAlbum := &models.Track{CleanTitle: "Pattampoochi", MainArtist: "Sublahshini", Album: "Yenna Paaru"}
+	if m, _ := BestMatch(withAlbum, []SearchResult{other}, 0); m.Score != 65 {
+		t.Errorf("a real album match still counts: score %d, want 65", m.Score)
+	}
+}

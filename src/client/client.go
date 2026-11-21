@@ -302,7 +302,9 @@ func rankResult(track NormalisedTrack, r SearchResult) int {
 	} else if len(track.CleanTitle) > 3 && (strings.Contains(resultTitle, track.CleanTitle) || strings.Contains(track.CleanTitle, resultTitle)) {
 		score += 25
 	}
-	if strings.EqualFold(track.Album, r.Album) {
+	// An empty album is "contained" in every album name: only compare two real albums.
+	if track.Album == "" || r.Album == "" {
+	} else if strings.EqualFold(track.Album, r.Album) {
 		score += 20
 	} else if util.ContainsFold(track.Album, r.Album) || util.ContainsFold(r.Album, track.Album) {
 		score += 15
