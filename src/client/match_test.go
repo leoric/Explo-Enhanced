@@ -163,6 +163,11 @@ func TestShortNameMatch(t *testing.T) {
 			"Mazhai Varuthu", lib("Malai Varuthu", "K.S. Chithra", "Other Film", 250), false},
 		{"not just similar", video("Kannamma", "Kannamma | Anirudh Ravichander | Kaala", 250),
 			"Kannamma", lib("Kanmani", "Anirudh Ravichander", "Kaala", 250), false},
+		// a fan edit (slowed, sped up, 8D…) is kept as its video: it is not the official song you own
+		{"slowed video", video("Hukum", "Hukum (Slowed + Reverb) | Jailer | Anirudh Ravichander", 260),
+			"Hukum", lib("Hukum", "Anirudh Ravichander", "Jailer", 260), false},
+		{"sped up video", video("Hukum", "Hukum Sped Up | Jailer | Anirudh Ravichander", 205),
+			"Hukum", lib("Hukum", "Anirudh Ravichander", "Jailer", 205), false},
 		{"both extended", &models.Track{CleanTitle: "Verappa Extended", Artist: "Sai Abhyankkar", VideoTitle: "Verappa Extended", VideoDuration: 250000},
 			"Verappa Extended", lib(`Verappa - Extended (From "Karuppu")`, "Sai Abhyankkar, Arivu", "Karuppu", 248), true},
 	}

@@ -27,7 +27,7 @@ STOP_RE = re.compile(
     rf"|(?<=[{INDIC}])\s*[-–—_]+\s*(?=[A-Za-z])|(?<=[A-Za-z])\s*[-–—_]+\s*(?=[{INDIC}])"
 )
 INDIC_RE = re.compile(f"[{INDIC}]")
-# Fan edits of the song: the official song is wanted instead, and never an edit.
+# Fan edits of the song (slowed, 8D…): kept as their own video, never swapped for the official song.
 FAN_EDIT = r"slowed|reverb|sped ?up|speed ?(?:up|down)|nightcore|8d|bass ?boosted"
 # Words that describe the upload, not the song (fan-edit words too: search for the song itself).
 UPLOAD_WORDS = r"official|lyric(?:al)?s?|full|video|audio|songs?|visuali[sz]er|promo|teaser|4k|8k|hd|uhd|latest"
@@ -159,7 +159,8 @@ def is_match(video_title, wanted, found_title, found_artists=(), video_artists=(
     """True when found_title is the same song as `wanted` (not a cover, remix, other song)."""
     if not same_name(wanted, found_title, found_artists, video_title, video_artists):
         return False
-    if FAN_RE.search(found_title):
+    # Fan edits (slowed, sped up, 8D…) keep their own audio, and are never another video's song.
+    if FAN_RE.search(video_title) or FAN_RE.search(found_title):
         return False
     found = versions(found_title)
     if not found <= versions(video_title):

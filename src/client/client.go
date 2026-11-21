@@ -347,6 +347,8 @@ var (
 	// Words that make it a different recording: video and library song must name the same ones.
 	versionWords = wordSet("female male remix reprise unplugged lofi instrumental karaoke cover acoustic live sad duet mashup extended rendition theme bgm slowed reverb nightcore 8d")
 	sameVersion  = map[string]string{"vivo": "live", "現場": "live", "现场": "live", "ライブ": "live", "伴奏": "instrumental", "리믹스": "remix"}
+	// Fan edits are kept as their video: never the official song in the library (same list as ytmusic_playlist.py).
+	fanEditRe = regexp.MustCompile(`(?i)\b(?:slowed|reverb|sped ?up|speed ?(?:up|down)|nightcore|8d|bass ?boosted)\b`)
 	bracketRe    = regexp.MustCompile(`[(\[（【][^)\]）】]*[)\]）】]`)
 	languages    = wordSet("tamil telugu hindi malayalam kannada")
 	artistSepRe  = regexp.MustCompile(`(?i),|;|&|/|\s+(?:feat\.?|ft\.?|x|and|with)\s+`)
@@ -454,7 +456,7 @@ func keptVideoMatch(track *models.Track, name string, r SearchResult) bool {
 	full := strings.TrimSpace(track.CleanTitle)
 	dropped := words(strings.TrimPrefix(full, strings.TrimSpace(name)))
 	exact := util.NormalizeTitle(r.Title) == util.NormalizeTitle(name)
-	if track.VideoTitle == "" || (len(dropped) > 0 && track.NameIsSong) || !(exact || sameSpelling(r.Title, name)) {
+	if track.VideoTitle == "" || fanEditRe.MatchString(track.VideoTitle) || (len(dropped) > 0 && track.NameIsSong) || !(exact || sameSpelling(r.Title, name)) {
 		return false
 	}
 	// the video's own version (its name and brackets; "| Love Duet Melody" describes the upload)
