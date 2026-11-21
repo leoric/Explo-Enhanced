@@ -1,6 +1,7 @@
 package util
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -131,6 +132,10 @@ func DownloadCover(url, coversDir string) (string, string) {
 	id := parts[len(parts)-2]
 	if strings.Contains(url, "scdn.co") || strings.Contains(url, "spotifycdn.com") {
 		id = parts[len(parts)-1]
+	}
+	// YouTube Music art: https://lh3.googleusercontent.com/<hash>=w544-h544 → hash of the URL
+	if strings.Contains(url, "googleusercontent.com") {
+		id = fmt.Sprintf("yt-%x", sha1.Sum([]byte(url)))
 	}
 	destPath := filepath.Join(coversDir, id+".jpg")
 	if _, err := os.Stat(destPath); os.IsNotExist(err) {

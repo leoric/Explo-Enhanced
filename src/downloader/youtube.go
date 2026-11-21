@@ -75,6 +75,10 @@ func (c *Youtube) GetConf() (MonitorConfig, error) {
 }
 
 func (c *Youtube) QueryTrack(track *models.Track) error { // Queries youtube for the song
+	if track.VideoID != "" { // imported from a YouTube Music playlist: we already know the exact video
+		track.ID = track.VideoID
+		return nil
+	}
 
 	query := fmt.Sprintf("%s - %s", track.Title, track.Artist)
 	if c.Cfg.APIKey == "" { // if no API key set, use Python YT Music module

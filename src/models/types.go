@@ -7,6 +7,7 @@ type Track struct {
 	AlbumID                   string  // Used by Lidarr
 	AlbumArtist               string
 	ID                        string
+	VideoID                   string // YouTube videoId from a YouTube Music playlist: download exactly this, skip searching
 	Artist                    string // All artists as returned by LB
 	Artists                   []string
 	MainArtist                string

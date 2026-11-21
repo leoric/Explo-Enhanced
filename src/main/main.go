@@ -37,6 +37,8 @@ func loadCustomTracks(dataDir, playlistID string) ([]*models.Track, string, erro
 		CoverURL   string `json:"coverUrl"`
 		CoverPath          string `json:"coverPath"`
 		MusicBrainzTrackID string `json:"mbTrackId,omitempty"`
+		VideoID            string `json:"videoId,omitempty"`
+		DurationMs         int    `json:"durationMs,omitempty"`
 	}
 	type cacheFile struct {
 		Tracks []cachedTrack `json:"tracks"`
@@ -84,6 +86,8 @@ func loadCustomTracks(dataDir, playlistID string) ([]*models.Track, string, erro
 			CoverURL:   t.CoverURL,
 			CoverPath:          t.CoverPath,
 			MusicBrainzTrackID: t.MusicBrainzTrackID,
+			VideoID:            t.VideoID,
+			Duration:           t.DurationMs,
 		}
 	}
 	return tracks, name, nil

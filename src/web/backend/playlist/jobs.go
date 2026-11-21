@@ -19,14 +19,10 @@ func (p *Playlist) RegisterCustomPlaylistRefresh(j *jobs.Jobs) error {
 	}
 
 	var envValues map[string]string
-	var AMSuffixRe = false
 	if data, err := os.ReadFile(p.cfg.WebEnvPath); err == nil {
 		envValues = p.settings.ParseEnvText(string(data))
 	} else {
 		envValues = map[string]string{}
-	}
-	if envValues["SUFFIX_REMOVAL"] == "true" {
-		AMSuffixRe = true
 	}
 
 	for _, plist := range playlists {
@@ -50,7 +46,7 @@ func (p *Playlist) RegisterCustomPlaylistRefresh(j *jobs.Jobs) error {
 					return
 				}
 				slog.Info("custom-playlists: refreshing", "id", plist.ID, "name", plist.Name, "source", plist.Source)
-				result, err := fetchCustomPlaylistTracks(plist, AMSuffixRe)
+				result, err := fetchCustomPlaylistTracks(plist, envValues)
 				if err != nil {
 					slog.Warn("custom-playlists: refresh fetch failed", "id", plist.ID, "err", err)
 					return
