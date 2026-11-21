@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"explo/src/models"
 	"testing"
 
 	"github.com/wader/goutubedl"
@@ -46,3 +47,16 @@ func TestCopyAudio(t *testing.T) {
 	}
 }
 
+func TestNoCoverWithoutAlbum(t *testing.T) {
+	withAlbum := models.Track{Album: "Scene", CoverURL: "https://x/art.jpg"}
+	noAlbum := models.Track{CoverURL: "https://x/art.jpg"} // a kept video: stays "[Unknown Album]", easy to find
+	if !wantsCover(true, withAlbum) {
+		t.Error("a song with an album should get its cover")
+	}
+	if wantsCover(true, noAlbum) {
+		t.Error("a song with no album must not get a cover")
+	}
+	if wantsCover(false, withAlbum) || wantsCover(true, models.Track{Album: "Scene"}) {
+		t.Error("no cover when EMBED_COVER_ART is off or there is no cover URL")
+	}
+}

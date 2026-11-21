@@ -285,17 +285,18 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult,
 	var opts ffmpeg.KwArgs
 	var streams []*ffmpeg.Stream
 	streams = append(streams, ffmpeg.Input(input))
-	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && track.CoverPath == "" {
+	cover := wantsCover(c.Cfg.EmbedCoverArt, *track)
+	if cover && track.CoverPath == "" {
 		_, track.CoverPath = util.DownloadCover(track.CoverURL, c.Cfg.CoversDir)
 	}
 	// ffmpeg can't embed a picture in Ogg/Opus (trac #4448): the whole save would fail.
 	// Navidrome reads cover.jpg from the album folder first, so put it there instead.
 	ext := strings.ToLower(filepath.Ext(outputPath))
 	oggContainer := ext == ".opus" || ext == ".ogg"
-	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && oggContainer {
+	if cover && oggContainer {
 		writeFolderCover(track.CoverPath, filepath.Dir(outputPath), c.DownloadDir)
 	}
-	if c.Cfg.EmbedCoverArt && track.CoverURL != "" && !oggContainer {
+	if cover && !oggContainer {
 		streams = append(streams, ffmpeg.Input(track.CoverPath))
 		opts = ffmpeg.KwArgs{
 			"c:v":            "mjpeg",
@@ -321,6 +322,12 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult,
 	}
 
 	return true
+}
+
+// wantsCover: a song with no album stays "[Unknown Album]" without art, so it's easy to spot,
+// and one video's thumbnail never becomes the cover of a shared "_" album folder.
+func wantsCover(embed bool, track models.Track) bool {
+	return embed && track.CoverURL != "" && track.Album != ""
 }
 
 // writeFolderCover copies the cover to <albumDir>/cover.jpg, keeping one that's already there.
