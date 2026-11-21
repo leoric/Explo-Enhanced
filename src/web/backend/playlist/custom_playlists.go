@@ -18,7 +18,7 @@ import (
 type CustomPlaylist struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
-	Source          string    `json:"source"`                     // "listenbrainz" | "apple_music" | "spotify"
+	Source          string    `json:"source"`                     // "listenbrainz" | "apple_music" | "spotify" | "youtube_music"
 	SourceURL       string    `json:"source_url,omitempty"`       // original URL for dedup + refresh
 	LBMBID          string    `json:"lb_mbid,omitempty"`          // ListenBrainz MBID (backward compat)
 	ArtworkURL      string    `json:"artwork_url,omitempty"`      // playlist cover image (Apple Music)
@@ -120,13 +120,17 @@ type FetchResult struct {
 
 // fetchCustomPlaylistTracks dispatches to the appropriate source fetcher.
 // This is the single point where source-specific logic lives for fetching.
-func fetchCustomPlaylistTracks(p CustomPlaylist, enabled bool) (FetchResult, error) {
+// env holds the web UI's .env values (SUFFIX_REMOVAL, YOUTUBE_PLAYLIST_LIMIT).
+func fetchCustomPlaylistTracks(p CustomPlaylist, env map[string]string) (FetchResult, error) {
 	switch p.Source {
 	case "apple_music":
-		name, art, tracks, err := fetchAppleMusicPlaylist(p.SourceURL, enabled)
+		name, art, tracks, err := fetchAppleMusicPlaylist(p.SourceURL, env["SUFFIX_REMOVAL"] == "true")
 		return FetchResult{name, art, tracks}, err
 	case "spotify":
 		name, art, tracks, err := fetchSpotifyPlaylist(p.SourceURL)
+		return FetchResult{name, art, tracks}, err
+	case "youtube_music":
+		name, art, tracks, err := fetchYouTubeMusicPlaylist(p.SourceURL, ytPlaylistLimit(env))
 		return FetchResult{name, art, tracks}, err
 	default: // "listenbrainz" or legacy empty
 		mbid := p.LBMBID
@@ -157,6 +161,8 @@ func extractSourceID(source, url string) (string, error) {
 		return extractAppleMusicID(url)
 	case "spotify":
 		return extractSpotifyID(url)
+	case "youtube_music":
+		return extractYouTubeMusicID(url)
 	default:
 		return extractLBMBID(url)
 	}

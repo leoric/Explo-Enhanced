@@ -75,6 +75,10 @@ func (c *Youtube) GetConf() (MonitorConfig, error) {
 }
 
 func (c *Youtube) QueryTrack(track *models.Track) error { // Queries youtube for the song
+	if track.VideoID != "" { // imported from a YouTube Music playlist: we already know the exact video
+		track.ID = track.VideoID
+		return nil
+	}
 
 	query := fmt.Sprintf("%s - %s", track.Title, track.Artist)
 	if c.Cfg.APIKey == "" { // if no API key set, use Python YT Music module
@@ -178,24 +182,51 @@ func getTopic(cfg cfg.Youtube, videos Videos, track models.Track) string {
 	return ""
 }
 
-// gets video stream using yt-dlp
-func getVideo(ctx context.Context, c Youtube, videoID string) (*goutubedl.DownloadResult, error) {
+// gets the audio stream using yt-dlp, preferring the codec that fits TRACK_EXTENSION as-is;
+// copyAudio reports whether that's what was picked, so ffmpeg can copy instead of re-encoding.
+func getVideo(ctx context.Context, c Youtube, videoID string) (stream *goutubedl.DownloadResult, copyAudio bool, err error) {
 
 	result, err := goutubedl.New(ctx, videoID, c.gouTubeOpts)
 	if err != nil {
-		return nil, fmt.Errorf("could not create URL for video download (ID: %s): %w", videoID, err)
+		return nil, false, fmt.Errorf("could not create URL for video download (ID: %s): %w", videoID, err)
 	}
 
-	downloadResult, err := result.Download(ctx, "bestaudio")
+	codec := copyableCodec(c.Cfg.FileExtension)
+	filter := "bestaudio"
+	if codec != "" {
+		filter = fmt.Sprintf("bestaudio[acodec^=%s]/bestaudio", codec)
+	}
+	downloadResult, err := result.Download(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("could not download video: %w", err)
+		return nil, false, fmt.Errorf("could not download video: %w", err)
 	}
 
-	return downloadResult, nil
+	return downloadResult, codec != "" && hasAudio(result.Info.Formats, codec), nil
 
 }
 
-func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult) bool {
+// copyableCodec is the YouTube audio codec that goes into a file of this extension unchanged.
+func copyableCodec(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "opus", "ogg":
+		return "opus"
+	case "m4a":
+		return "mp4a" // AAC, e.g. "mp4a.40.2"
+	}
+	return ""
+}
+
+// hasAudio: is there an audio-only format of this codec, i.e. the one "bestaudio[acodec^=codec]" downloads.
+func hasAudio(formats []goutubedl.Format, codec string) bool {
+	for _, f := range formats {
+		if strings.HasPrefix(f.ACodec, codec) && (f.VCodec == "none" || f.VCodec == "") {
+			return true
+		}
+	}
+	return false
+}
+
+func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult, copyAudio bool) bool {
 
 	defer func() {
 		if err := stream.Close(); err != nil {
@@ -254,10 +285,18 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult)
 	var opts ffmpeg.KwArgs
 	var streams []*ffmpeg.Stream
 	streams = append(streams, ffmpeg.Input(input))
-	if c.Cfg.EmbedCoverArt && track.CoverURL != "" {
-		if track.CoverPath == "" {
-			_, track.CoverPath = util.DownloadCover(track.CoverURL, c.Cfg.CoversDir)
-		}
+	cover := wantsCover(c.Cfg.EmbedCoverArt, *track)
+	if cover && track.CoverPath == "" {
+		_, track.CoverPath = util.DownloadCover(track.CoverURL, c.Cfg.CoversDir)
+	}
+	// ffmpeg can't embed a picture in Ogg/Opus (trac #4448): the whole save would fail.
+	// Navidrome reads cover.jpg from the album folder first, so put it there instead.
+	ext := strings.ToLower(filepath.Ext(outputPath))
+	oggContainer := ext == ".opus" || ext == ".ogg"
+	if cover && oggContainer {
+		writeFolderCover(track.CoverPath, filepath.Dir(outputPath), c.DownloadDir)
+	}
+	if cover && !oggContainer {
 		streams = append(streams, ffmpeg.Input(track.CoverPath))
 		opts = ffmpeg.KwArgs{
 			"c:v":            "mjpeg",
@@ -273,6 +312,9 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult)
 			"loglevel": "error",
 		}
 	}
+	if copyAudio { // already in the right codec: copy instead of re-encoding
+		opts["c:a"] = "copy"
+	}
 
 	if err := util.WriteMetadata(streams, c.Cfg.FfmpegPath, outputPath, opts); err != nil {
 		slog.Error("failed saving file", "err", err)
@@ -280,6 +322,33 @@ func saveVideo(c Youtube, track *models.Track, stream *goutubedl.DownloadResult)
 	}
 
 	return true
+}
+
+// wantsCover: a song with no album stays "[Unknown Album]" without art, so it's easy to spot,
+// and one video's thumbnail never becomes the cover of a shared "_" album folder.
+func wantsCover(embed bool, track models.Track) bool {
+	return embed && track.CoverURL != "" && track.Album != ""
+}
+
+// writeFolderCover copies the cover to <albumDir>/cover.jpg, keeping one that's already there.
+// Only for per-album folders (PATH_TEMPLATE): in the flat download dir one cover.jpg would
+// become the art of every song in it.
+func writeFolderCover(coverPath, albumDir, downloadDir string) {
+	if coverPath == "" || filepath.Clean(albumDir) == filepath.Clean(downloadDir) {
+		return
+	}
+	dest := filepath.Join(albumDir, "cover.jpg")
+	if _, err := os.Stat(dest); err == nil {
+		return
+	}
+	data, err := os.ReadFile(coverPath)
+	if err != nil {
+		slog.Warn("cover art not available", "path", coverPath, "err", err)
+		return
+	}
+	if err := os.WriteFile(dest, data, 0644); err != nil {
+		slog.Warn("failed writing folder cover", "path", dest, "err", err)
+	}
 }
 
 // filter out video ID
@@ -301,14 +370,14 @@ func (c *Youtube) gatherVideo(cfg cfg.Youtube, videos Videos, track models.Track
 }
 
 func fetchAndSaveVideo(ctx context.Context, cfg Youtube, track *models.Track) bool {
-	stream, err := getVideo(ctx, cfg, track.ID)
+	stream, copyAudio, err := getVideo(ctx, cfg, track.ID)
 	if err != nil {
 		slog.Error("failed getting stream for video", "trackID", track.ID, "err", err)
 		return false
 	}
 
 	if stream != nil {
-		return saveVideo(cfg, track, stream)
+		return saveVideo(cfg, track, stream, copyAudio)
 	}
 
 	slog.Error("stream was empty for video", "trackID", track.ID)

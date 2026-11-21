@@ -44,7 +44,7 @@ WORKDIR /opt/explo/
 # Copy entrypoint, binary, python helper
 COPY ./docker/start.sh /start.sh
 COPY --from=builder /app/explo .
-COPY src/downloader/youtube_music/search_ytmusic.py .
+COPY src/downloader/youtube_music/search_ytmusic.py src/downloader/youtube_music/ytmusic_playlist.py ./
 
 
 RUN chmod +x /start.sh ./explo

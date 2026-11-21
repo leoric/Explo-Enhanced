@@ -102,6 +102,7 @@ type DownloadConfig struct {
 	Lidarr            Lidarr
 	ExcludeLocal      bool
 	DownloadLimiter   int      `env:"DOWNLOAD_LIMITER" env-default:"1"` // rate limit download operations
+	MaxDownloads      int      `env:"MAX_DOWNLOADS_PER_RUN" env-default:"0"` // new tracks to download per run, 0 = no limit
 	OverwriteMetadata bool     `env:"OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
 	KeepPermissions   bool     `env:"KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	RenameTrack       bool     `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format

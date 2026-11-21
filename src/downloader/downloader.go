@@ -73,6 +73,22 @@ func (c *DownloadClient) StartDownload(tracks *[]*models.Track) {
 		}
 	}
 
+	// Over the limit: leave the rest for the next run (they drop out of this run's playlist).
+	skip := make(map[*models.Track]bool)
+	if c.Cfg.MaxDownloads > 0 {
+		missing := 0
+		for _, track := range *tracks {
+			if !track.Present {
+				if missing++; missing > c.Cfg.MaxDownloads {
+					skip[track] = true
+				}
+			}
+		}
+		if len(skip) > 0 {
+			slog.Info("download limit reached, remaining tracks wait for the next run", "limit", c.Cfg.MaxDownloads, "skipped", len(skip))
+		}
+	}
+
 	for _, d := range c.Downloaders {
 		var g errgroup.Group
 		g.SetLimit(3)
@@ -80,7 +96,7 @@ func (c *DownloadClient) StartDownload(tracks *[]*models.Track) {
 		limiter := rate.NewLimiter(rate.Every(time.Second), c.Cfg.DownloadLimiter)
 
 		for _, track := range *tracks {
-			if track.Present {
+			if track.Present || skip[track] {
 				continue
 			}
 

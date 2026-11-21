@@ -57,7 +57,7 @@ func (p *Playlist) HandleGetCustomPlaylists(w http.ResponseWriter, r *http.Reque
 func (p *Playlist) HandleImportCustomPlaylist(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL         string `json:"url"`
-		Source      string `json:"source"` // "listenbrainz" | "apple_music"
+		Source      string `json:"source"` // "listenbrainz" | "apple_music" | "spotify" | "youtube_music"
 		RefreshDays int    `json:"refresh_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -86,17 +86,13 @@ func (p *Playlist) HandleImportCustomPlaylist(w http.ResponseWriter, r *http.Req
 
 	// Read .env
 	var envValues map[string]string
-	var enabled = false
 	if data, err := os.ReadFile(p.cfg.WebEnvPath); err == nil {
 		envValues = p.settings.ParseEnvText(string(data))
 	} else {
 		envValues = map[string]string{}
 	}
-	if envValues["SUFFIX_REMOVAL"] == "true" {
-		enabled = true
-	}
 
-	result, err := fetchCustomPlaylistTracks(CustomPlaylist{Source: body.Source, SourceURL: body.URL}, enabled)
+	result, err := fetchCustomPlaylistTracks(CustomPlaylist{Source: body.Source, SourceURL: body.URL}, envValues)
 	if err != nil {
 		slog.Error("custom-playlists: fetch failed", "source", body.Source, "err", err)
 		http.Error(w, "failed to fetch playlist: "+err.Error(), http.StatusBadGateway)
@@ -144,7 +140,7 @@ func (p *Playlist) HandleImportCustomPlaylist(w http.ResponseWriter, r *http.Req
 	// Save metadata
 	// Derive LBMBID for backward compatibility (LB playlists only)
 	var lbMBID string
-	if body.Source != "apple_music" && body.Source != "spotify" {
+	if body.Source == "listenbrainz" {
 		lbMBID = sourceID
 	}
 
@@ -230,20 +226,16 @@ func (p *Playlist) HandleRefreshCustomPlaylist(w http.ResponseWriter, r *http.Re
 	}
 
 	var envValues map[string]string
-	var AMSuffixRe = false
 	if data, err := os.ReadFile(p.cfg.WebEnvPath); err == nil {
 		envValues = p.settings.ParseEnvText(string(data))
 	} else {
 		envValues = map[string]string{}
 	}
-	if envValues["SUFFIX_REMOVAL"] == "true" {
-		AMSuffixRe = true
-	}
 
 	plist := playlists[idx]
 	slog.Info("custom-playlists: manual refresh", "id", id, "source", plist.Source)
 
-	result, err := fetchCustomPlaylistTracks(plist, AMSuffixRe)
+	result, err := fetchCustomPlaylistTracks(plist, envValues)
 	if err != nil {
 		slog.Error("custom-playlists: refresh fetch failed", "id", id, "err", err)
 		http.Error(w, "failed to fetch playlist: "+err.Error(), http.StatusBadGateway)
@@ -320,7 +312,14 @@ func (p *Playlist) HandleDeleteCustomPlaylist(w http.ResponseWriter, r *http.Req
 			env := p.settings.ParseEnvText(string(data))
 			if env["USE_SUBDIRECTORY"] == "true" && env["DOWNLOAD_DIR"] != "" {
 				prefix := cases.Title(language.Und).String(id) // "custom-1234" -> "Custom-1234"
-				removed, err := util.RemoveDirsByPrefix(env["DOWNLOAD_DIR"], prefix)
+				removed, err := util.RemoveDirsByPrefix(env["DOWNLOAD_DIR"], prefix) // folders from before CustomDirName
+				if dir := filepath.Join(env["DOWNLOAD_DIR"], util.CustomDirName(deletedName, id)); err == nil {
+					if _, statErr := os.Stat(dir); statErr == nil {
+						if err = os.RemoveAll(dir); err == nil {
+							removed++
+						}
+					}
+				}
 				if err != nil {
 					slog.Warn("custom-playlists: track cleanup failed", "id", id, "err", err)
 				} else {

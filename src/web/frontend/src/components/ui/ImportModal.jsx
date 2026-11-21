@@ -4,6 +4,7 @@ import { importCustomPlaylist } from '../../lib/api'
 import listenbrainzIcon from '../../assets/listenbrainz.svg'
 import appleMusicIcon from '../../assets/apple-music.svg'
 import spotifyIcon from '../../assets/spotify.svg'
+import youtubeMusicIcon from '../../assets/youtube-music.svg'
 
 const REFRESH_OPTIONS = [
   { value: 0,  label: 'Never' },
@@ -17,6 +18,8 @@ const SOURCES = [
   { key: 'listenbrainz', label: 'ListenBrainz', icon: listenbrainzIcon, color: '#EB743B', placeholder: 'https://listenbrainz.org/playlist/\u2026' },
   { key: 'apple_music',  label: 'Apple Music',  icon: appleMusicIcon,  color: '#FA243C', placeholder: 'https://music.apple.com/us/playlist/\u2026' },
   { key: 'spotify',      label: 'Spotify',      icon: spotifyIcon,     color: '#1ed760', placeholder: 'https://open.spotify.com/playlist/\u2026' },
+  // Public playlists only (e.g. YouTube Charts' "Top Weekly Videos Tamil"); charts change weekly
+  { key: 'youtube_music', label: 'YouTube Music', icon: youtubeMusicIcon, color: '#FF0000', placeholder: 'https://music.youtube.com/playlist?list=\u2026', defaultRefresh: 7, textColor: '#fff' },
 ]
 
 function CoverThumb({ src, index, onLoaded }) {
@@ -108,7 +111,7 @@ function SuccessPanel({ result, onImported, onSync, onClose, onError }) {
         )}
         <button
           onClick={() => { onImported(result); onClose() }}
-          className="bg-[var(--brand)] text-black border-none rounded-full px-5 py-1.5 text-[13px] font-semibold cursor-pointer hover:scale-[1.04] active:scale-[0.97] transition-transform"
+          className="bg-[var(--brand)] text-[var(--brand-text)] border-none rounded-full px-5 py-1.5 text-[13px] font-semibold cursor-pointer hover:scale-[1.04] active:scale-[0.97] transition-transform"
         >
           Done
         </button>
@@ -118,7 +121,7 @@ function SuccessPanel({ result, onImported, onSync, onClose, onError }) {
 }
 
 export function ImportModal({ onClose, onImported, onSync }) {
-  const [source, setSource] = useState(null)   // 'listenbrainz' | 'apple_music'
+  const [source, setSource] = useState(null)   // 'listenbrainz' | 'apple_music' | 'spotify' | 'youtube_music'
   const [url, setUrl] = useState('')
   const [refreshDays, setRefreshDays] = useState(0)
   const [phase, setPhase] = useState('source') // 'source' | 'form' | 'success' | 'error'
@@ -172,6 +175,7 @@ export function ImportModal({ onClose, onImported, onSync }) {
           WebkitBackdropFilter: 'blur(8px)',
           boxShadow: '0 24px 64px #00000099',
           '--brand': sourceCfg?.color ?? '#1ed760',
+          '--brand-text': sourceCfg?.textColor ?? '#000', // black is unreadable on YouTube red
         }}
       >
         <AnimatePresence mode="wait">
@@ -199,11 +203,11 @@ export function ImportModal({ onClose, onImported, onSync }) {
               </div>
 
               {/* Source buttons */}
-              <div className="px-5 pt-5 pb-5 grid grid-cols-3 gap-3">
+              <div className="px-5 pt-5 pb-5 grid grid-cols-2 gap-3">
                 {SOURCES.map(s => (
                   <button
                     key={s.key}
-                    onClick={() => { setSource(s.key); setPhase('form') }}
+                    onClick={() => { setSource(s.key); setRefreshDays(s.defaultRefresh ?? 0); setPhase('form') }}
                     onMouseMove={e => {
                       const r = e.currentTarget.getBoundingClientRect()
                       e.currentTarget.style.setProperty('--mx', `${e.clientX - r.left}px`)
@@ -307,7 +311,7 @@ export function ImportModal({ onClose, onImported, onSync }) {
                   disabled={!canSubmit}
                   className={`border-none rounded-full px-5 py-1.5 text-[13px] font-semibold transition-all
                     ${canSubmit
-                      ? 'bg-[var(--brand)] text-black cursor-pointer hover:scale-[1.04] active:scale-[0.97]'
+                      ? 'bg-[var(--brand)] text-[var(--brand-text)] cursor-pointer hover:scale-[1.04] active:scale-[0.97]'
                       : 'bg-[#2a2a2a] text-[#555] cursor-default'
                     }`}
                 >
@@ -363,7 +367,7 @@ export function ImportModal({ onClose, onImported, onSync }) {
                 </button>
                 <button
                   onClick={() => { setPhase('form'); setErrorMsg('') }}
-                  className="bg-[var(--brand)] text-black border-none rounded-full px-5 py-1.5 text-[13px] font-semibold cursor-pointer hover:scale-[1.04] active:scale-[0.97] transition-transform"
+                  className="bg-[var(--brand)] text-[var(--brand-text)] border-none rounded-full px-5 py-1.5 text-[13px] font-semibold cursor-pointer hover:scale-[1.04] active:scale-[0.97] transition-transform"
                 >
                   Try again
                 </button>

@@ -33,6 +33,11 @@ type PlaylistTrack struct {
 	Album      string
 	CoverURL           string
 	MusicBrainzTrackID string
+	VideoID            string // YouTube Music only: exact video to download
+	DurationMs         int    // YouTube Music only: official audio length, 0 when unknown
+	VideoTitle         string // YouTube Music only, kept videos: full title, length and whether the
+	VideoDurationMs    int    // name is itself a song, for matching the library (models.Track)
+	NameIsSong         bool
 }
 
 
@@ -97,6 +102,11 @@ func modelTracksToPlaylistTracks(tracks []*models.Track) []PlaylistTrack {
 			Album:      t.Album,
 			CoverURL:           t.CoverURL,
 			MusicBrainzTrackID: t.MusicBrainzTrackID,
+			VideoID:            t.VideoID,
+			DurationMs:         t.Duration,
+			VideoTitle:         t.VideoTitle,
+			VideoDurationMs:    t.VideoDuration,
+			NameIsSong:         t.NameIsSong,
 		}
 	}
 	return out
@@ -113,6 +123,14 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 		CoverURL  string `json:"coverUrl,omitempty"`
 		CoverPath string `json:"coverPath,omitempty"`
 		InLibrary *bool  `json:"inLibrary,omitempty"`
+		// Read back by loadCustomTracks on the next run of a custom playlist.
+		MainArtist         string `json:"mainArtist,omitempty"`
+		MusicBrainzTrackID string `json:"mbTrackId,omitempty"`
+		VideoID            string `json:"videoId,omitempty"`
+		DurationMs         int    `json:"durationMs,omitempty"`
+		VideoTitle         string `json:"videoTitle,omitempty"`
+		VideoDurationMs    int    `json:"videoDurationMs,omitempty"`
+		NameIsSong         bool   `json:"nameIsSong,omitempty"`
 	}
 	type cache struct {
 		Tracks []cachedTrack `json:"tracks"`
@@ -141,6 +159,13 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 			CoverURL:  t.CoverURL,
 			CoverPath: t.CoverPath,
 			InLibrary: inLibrary,
+			MainArtist:         t.MainArtist,
+			MusicBrainzTrackID: t.MusicBrainzTrackID,
+			VideoID:            t.VideoID,
+			DurationMs:         t.Duration,
+			VideoTitle:         t.VideoTitle,
+			VideoDurationMs:    t.VideoDuration,
+			NameIsSong:         t.NameIsSong,
 		}
 	}
 
@@ -183,6 +208,11 @@ type cachedPrefetchTrack struct {
 	CoverURL   string `json:"coverUrl,omitempty"`
 	CoverPath          string `json:"coverPath,omitempty"`
 	MusicBrainzTrackID string `json:"mbTrackId,omitempty"`
+	VideoID            string `json:"videoId,omitempty"`
+	DurationMs         int    `json:"durationMs,omitempty"`
+	VideoTitle         string `json:"videoTitle,omitempty"`
+	VideoDurationMs    int    `json:"videoDurationMs,omitempty"`
+	NameIsSong         bool   `json:"nameIsSong,omitempty"`
 }
 
 // writePreliminaryCache writes the track cache with remote cover URLs immediately.
@@ -190,7 +220,7 @@ type cachedPrefetchTrack struct {
 func writePreliminaryCache(cfgDir, playlistType string, tracks []PlaylistTrack) bool {
 	ct := make([]cachedPrefetchTrack, len(tracks))
 	for i, t := range tracks {
-		ct[i] = cachedPrefetchTrack{Rank: i + 1, Title: t.Title, Artist: t.Artist, MainArtist: t.MainArtist, Release: t.Album, CoverURL: t.CoverURL, MusicBrainzTrackID: t.MusicBrainzTrackID}
+		ct[i] = cachedPrefetchTrack{Rank: i + 1, Title: t.Title, Artist: t.Artist, MainArtist: t.MainArtist, Release: t.Album, CoverURL: t.CoverURL, MusicBrainzTrackID: t.MusicBrainzTrackID, VideoID: t.VideoID, DurationMs: t.DurationMs, VideoTitle: t.VideoTitle, VideoDurationMs: t.VideoDurationMs, NameIsSong: t.NameIsSong}
 	}
 	if !writeTrackCache(cfgDir, playlistType, ct) {
 		return false
@@ -210,7 +240,7 @@ func downloadAndCacheCovers(cfgDir, playlistType string, tracks []PlaylistTrack)
 	ct := make([]cachedPrefetchTrack, len(tracks))
 	for i, t := range tracks {
 		APIPath, coverPath := util.DownloadCover(t.CoverURL, coversDir)
-		ct[i] = cachedPrefetchTrack{Rank: i + 1, Title: t.Title, Artist: t.Artist, MainArtist: t.MainArtist, Release: t.Album, CoverURL: APIPath, CoverPath: coverPath, MusicBrainzTrackID: t.MusicBrainzTrackID}
+		ct[i] = cachedPrefetchTrack{Rank: i + 1, Title: t.Title, Artist: t.Artist, MainArtist: t.MainArtist, Release: t.Album, CoverURL: APIPath, CoverPath: coverPath, MusicBrainzTrackID: t.MusicBrainzTrackID, VideoID: t.VideoID, DurationMs: t.DurationMs, VideoTitle: t.VideoTitle, VideoDurationMs: t.VideoDurationMs, NameIsSong: t.NameIsSong}
 	}
 	if writeTrackCache(cfgDir, playlistType, ct) {
 		slog.Info("prefetch: cache updated", "playlist", playlistType, "covers", "local")
