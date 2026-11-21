@@ -67,6 +67,10 @@ LABEL_RE = re.compile(
 ARTIST_SEP_RE = re.compile(r",|&|/|\(|\)|\s+(?:and|x|feat\.?|ft\.?|with|y|e|و)\s+", re.I)
 # A cover upload ("Cover by", Korean/Japanese/Chinese "original singer" / "cover"): keep the cover.
 COVER_RE = re.compile(r"\bcover(ed)?\b|원곡|カバー|翻唱", re.I)
+# Not a song. "Promo" is not here: Tamil "promo songs" are full songs.
+TEASER_RE = re.compile(r"\b(trailer|teaser|glimpse|snippet|first look|motion poster|rehearsal|making of|behind the scenes)\b", re.I)
+# Zero-width space, direction marks and isolates, word joiner, byte-order mark. Not ZWJ/ZWNJ: they shape Indian letters.
+INVISIBLE_RE = re.compile("[\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
 LANG_RE = re.compile(r"\b(tamil|telugu|kannada|malayalam|hindi)\b", re.I)
 ALNUM_RE = re.compile(r"[\W_]+")
 MIN_SIMILARITY = 0.85
@@ -85,7 +89,7 @@ def candidates(title):
     """The first two non-empty segments: 'Love Insurance Kompany - Dheema Promo' tries both.
     English spellings first: library titles and YouTube Music song titles use them."""
     names = []
-    for part in STOP_RE.split(title):
+    for part in STOP_RE.split(INVISIBLE_RE.sub("", title)):
         name = " ".join(TAMIL_JUNK_RE.sub(" ", JUNK_RE.sub(" ", part)).split())
         if name and name not in names:
             names.append(name)
@@ -185,15 +189,24 @@ def other_song(item, found):
     """True when an official video's performers are not on the found song and the lengths differ by
     more than 30 s: the same title by someone else ('Hong Kong' by The Weeknd vs by Sgija Keys).
     Either alone is normal for the right song (composer-credited videos, long intros).
-    "Big Ass" = "Jeng Big Ass" and "XVEVO" = "X": a name inside the other counts as the same artist."""
+    "Big Ass" = "Jeng Big Ass" and "XVEVO" = "X": a name inside the other counts as the same artist.
+    Also true for a 10+ minute video (jukebox, full album) against a song under half its length."""
+    a, b = item.get("duration_seconds"), found.get("duration_seconds")
+    if a and b and a >= 600 and b < a / 2:
+        return True
     if item.get("videoType") != "MUSIC_VIDEO_TYPE_OMV":
         return False  # user uploads list the uploader's channel, not the performer
     mine = performers(a["name"] for a in item.get("artists") or [] if a.get("name"))
     theirs = performers(a["name"] for a in found.get("artists") or [] if a.get("name"))
     if not mine or any(same_artist(a, b) for a in mine for b in theirs):
         return False
-    a, b = item.get("duration_seconds"), found.get("duration_seconds")
     return bool(a and b and abs(a - b) > 30)
+
+
+def skipped(item, found):
+    """Trailers, teasers, snippets and rehearsals aren't songs: leave them out, unless one matched a real song
+    ("Glimpse of Us"). Mashups, jukeboxes and full albums are kept."""
+    return not found and item.get("videoType") != "MUSIC_VIDEO_TYPE_ATV" and bool(TEASER_RE.search(item.get("title") or ""))
 
 
 def clean_title(title):
@@ -246,7 +259,8 @@ def resolve(yt, item):
     video_artists = [a["name"] for a in artists if a.get("name")]
     # UGC uploads list the channel (e.g. "Sun TV") as artist; that only confuses search.
     artist = artists[0]["name"] if artists and item.get("videoType") != "MUSIC_VIDEO_TYPE_UGC" else ""
-    # "COOLKID - Song": the artist's own name is not a song name to search for.
+    # "COOLKID - Song": the artist's own name is not a song name to search for, unless it is the
+    # whole title ("CRUSH!" by CRUSH).
     listed = {norm(a) for a in video_artists}
     names = candidates(title)
     names = [n for n in names if norm(n) not in listed] or names
@@ -289,6 +303,8 @@ def main():
             track = track_from(item, "song")
         else:
             found = resolve(yt, item)
+            if skipped(item, found):
+                continue
             track = track_from(found, "resolved") if found else track_from(item, "video")
         if track["videoId"] in seen:  # two uploads of the same song resolve to one videoId
             continue

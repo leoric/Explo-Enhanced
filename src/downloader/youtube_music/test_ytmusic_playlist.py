@@ -6,7 +6,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ytmusic_playlist import candidates, clean_title, film_of, is_match, performers, resolve, song_name, track_from  # noqa: E402
+from ytmusic_playlist import candidates, clean_title, film_of, is_match, performers, resolve, skipped, song_name, track_from  # noqa: E402
 
 failed = []
 
@@ -206,6 +206,31 @@ check(not is_match("Hukum (Slowed + Reverb)", "Hukum", "Hukum (Slowed + Reverb)"
 check(not is_match("Лампочки", "Лампочки", "Лампочки (Speed Down)"))
 check(not is_match("Hukum Nightcore", "Hukum", "Hukum (Nightcore)"))
 check(not is_match("Hukum (Lofi)", "Hukum", "Hukum"))  # a lofi version is its own release, not a fan edit
+
+# C1: invisible characters are dropped (word joiner, direction marks); ZWJ/ZWNJ shape Malayalam/Hindi letters and stay
+check(candidates("⁠Noche Perfecta") == ["Noche Perfecta"])
+check(candidates("⁨قلبي شايل⁩ | Official Video") == ["قلبي شايل"])
+check(candidates("അവന്‍") == ["അവന്‍"])
+
+# E1/E2: trailers, teasers, glimpses, snippets and rehearsals are skipped, unless they matched a real song
+check(skipped(video("Coolie - Official Trailer | Superstar Rajinikanth"), None))
+check(skipped(video("Coolie - Glimpse | Lokesh Kanagaraj"), None))
+check(skipped(video("Miyagi - На дне (Official snippet)"), None))
+check(skipped(video("IVE 아이브 2026 MMA PERFORMANCE REHEARSAL"), None))
+check(not skipped(video("Glimpse of Us"), song("Glimpse of Us", "Joji")))
+check(not skipped(video("Dheema - Promo Song | Love Insurance Kompany"), None))  # Tamil promo songs are songs
+check(not skipped({**video("Trailer"), "videoType": "MUSIC_VIDEO_TYPE_ATV"}, None))  # official audio
+# E3: mashups, jukeboxes and full albums are kept as the video
+check(not skipped(video("Meesaya Murukku 2 - Full Album | Hiphop Tamizha"), None))
+check(not skipped(video("Mashup 15 In 1 | Tamil Hits"), None))
+# a 10+ minute video is never swapped for a song under half its length (album named after its title song)
+album = timed(video("Meesaya Murukku 2 - Full Album | Hiphop Tamizha", "Hiphop Tamizha"), 2061)
+title_song = timed(song("Meesaya Murukku 2", "Hiphop Tamizha"), 200)
+check(resolve(FakeYT({"Meesaya Murukku 2 Hiphop Tamizha": [title_song]}), album) is None)
+long_live = timed(video("AH, JESUS / CORAÇÃO IGUAL AO TEU", "Gabriela Rocha"), 748)
+check(resolve(FakeYT({"AH, JESUS / CORAÇÃO IGUAL AO TEU Gabriela Rocha": [timed(song("AH, JESUS / CORAÇÃO IGUAL AO TEU", "Gabriela Rocha"), 748)]}), long_live) is not None)
+long_intro = timed(video("MONEYMONEYMONEY", "Ghostface"), 521)  # under 10 minutes: an intro, not an album
+check(resolve(FakeYT({"MONEYMONEYMONEY Ghostface": [timed(song("MONEYMONEYMONEY", "Ghostface"), 140)]}), long_intro) is not None)
 
 print(f"{check.runs - len(failed)} passed, {len(failed)} failed", "(lines " + ", ".join(map(str, failed)) + ")" if failed else "")
 sys.exit(1 if failed else 0)
