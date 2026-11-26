@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,6 +173,7 @@ type Slskd struct {
 	SlskdDir          string `env:"SLSKD_DIR" env-default:"/slskd/"`
 	MigrateDL         bool   `env:"SLSKD_MIGRATE_DOWNLOADS" env-default:"false"` // Move downloads from SlskdDir to DownloadDir
 	MigrateDLOld         bool   `env:"MIGRATE_DOWNLOADS" env-default:"false"` // Move downloads from SlskdDir to DownloadDir (Old)
+	CoversDir         string // shared cover cache, used for embedding cover art
 	RenameTrack       bool   `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format (will be deprecated)
 	PathTemplate	  string `env:"PATH_TEMPLATE"`
 	OverwriteMetadata bool   `env:"SLSKD_OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
@@ -282,6 +284,12 @@ func (cfg *Config) ReadEnv() {
 func (cfg *Config) CommonFixes() {
 	cfg.DownloadCfg.Youtube.FileExtension = strings.TrimPrefix(cfg.DownloadCfg.Youtube.FileExtension, ".")
 	cfg.DownloadCfg.Youtube.CoversDir = filepath.Join(filepath.Dir(cfg.ServerCfg.WebDataDir), "cache", "covers")
+	cfg.DownloadCfg.Slskd.CoversDir = cfg.DownloadCfg.Youtube.CoversDir
+	lb := &cfg.DiscoveryCfg.Listenbrainz
+	if size := NormalizeCoverArtSize(lb.CoverArtSize); size != strings.TrimSpace(lb.CoverArtSize) {
+		slog.Warn("unsupported COVER_ART_SIZE, using the nearest supported size (250, 500 or 1200)", "configured", lb.CoverArtSize, "using", size)
+		lb.CoverArtSize = size
+	}
 	cfg.ClientCfg.URL = fixBaseURL(cfg.ClientCfg.URL)
 	cfg.DownloadCfg.Slskd.URL = fixBaseURL(cfg.DownloadCfg.Slskd.URL)
 	cfg.DownloadCfg.Lidarr.URL = fixBaseURL(cfg.DownloadCfg.Lidarr.URL)
@@ -295,6 +303,32 @@ func (cfg *Config) NormalizeDir() {
 	cfg.DownloadCfg.Slskd.SlskdDir = fixDir(cfg.DownloadCfg.Slskd.SlskdDir)
 	cfg.DownloadCfg.Lidarr.LidarrDir = fixDir(cfg.DownloadCfg.Lidarr.LidarrDir)
 	cfg.DownloadCfg.DownloadDir = fixDir(cfg.DownloadCfg.DownloadDir)
+}
+
+// coverArtSizes are the thumbnail sizes the Cover Art Archive serves. Any other size,
+// or none, returns the full-size original image, which can be tens of megabytes.
+var coverArtSizes = []int{250, 500, 1200}
+
+// NormalizeCoverArtSize maps size to the nearest supported Cover Art Archive thumbnail size (250 if unset or invalid)
+func NormalizeCoverArtSize(size string) string {
+	n, err := strconv.Atoi(strings.TrimSpace(size))
+	if err != nil {
+		return strconv.Itoa(coverArtSizes[0])
+	}
+	best := coverArtSizes[0]
+	for _, s := range coverArtSizes {
+		if abs(n-s) < abs(n-best) {
+			best = s
+		}
+	}
+	return strconv.Itoa(best)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func fixDir(dir string) string {

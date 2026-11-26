@@ -58,12 +58,12 @@ type mbRelease struct {
 }
 
 // FetchFreshReleaseTracks loads Fresh Releases tracks for UI prefetch.
-func FetchFreshReleaseTracks(httpClient *util.HttpClient, user string) ([]*models.Track, error) {
+func FetchFreshReleaseTracks(httpClient *util.HttpClient, user, coverArtSize string) ([]*models.Track, error) {
 	return (&ListenBrainz{
 		HttpClient: httpClient,
 		cfg: cfg.Listenbrainz{
 			User:              user,
-			CoverArtSize:      "250",
+			CoverArtSize:      coverArtSize,
 			FreshReleaseDays:  30,
 			FreshReleaseLimit: 8,
 		},
@@ -198,7 +198,7 @@ func (c *ListenBrainz) tracksFromRelease(rel freshRelease) ([]*models.Track, err
 	}
 
 	coverID := firstNonEmpty(rel.CaaReleaseMbid, rel.ReleaseMbid)
-	coverURL := fmt.Sprintf("https://coverartarchive.org/release/%s/front-%s", coverID, c.cfg.CoverArtSize)
+	coverURL := fmt.Sprintf("https://coverartarchive.org/release/%s/front-%s", coverID, c.coverSize())
 
 	tracks := make([]*models.Track, 0)
 	for _, media := range mb.Media {

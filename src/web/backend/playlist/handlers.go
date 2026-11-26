@@ -96,7 +96,7 @@ func (p *Playlist) HandleImportCustomPlaylist(w http.ResponseWriter, r *http.Req
 		enabled = true
 	}
 
-	result, err := fetchCustomPlaylistTracks(CustomPlaylist{Source: body.Source, SourceURL: body.URL}, enabled)
+	result, err := fetchCustomPlaylistTracks(CustomPlaylist{Source: body.Source, SourceURL: body.URL}, enabled, p.coverArtSize())
 	if err != nil {
 		slog.Error("custom-playlists: fetch failed", "source", body.Source, "err", err)
 		http.Error(w, "failed to fetch playlist: "+err.Error(), http.StatusBadGateway)
@@ -243,7 +243,7 @@ func (p *Playlist) HandleRefreshCustomPlaylist(w http.ResponseWriter, r *http.Re
 	plist := playlists[idx]
 	slog.Info("custom-playlists: manual refresh", "id", id, "source", plist.Source)
 
-	result, err := fetchCustomPlaylistTracks(plist, AMSuffixRe)
+	result, err := fetchCustomPlaylistTracks(plist, AMSuffixRe, p.coverArtSize())
 	if err != nil {
 		slog.Error("custom-playlists: refresh fetch failed", "id", id, "err", err)
 		http.Error(w, "failed to fetch playlist: "+err.Error(), http.StatusBadGateway)
@@ -387,6 +387,7 @@ func (p *Playlist) HandlePrefetchCovers(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 
 	slog.Info("prefetch: starting", "user", body.User, "playlists", body.Playlists, "source", body.Source, "force_refresh", forceRefresh)
+	coverArtSize := p.coverArtSize()
 	go func() {
 		for _, pt := range body.Playlists {
 			if !validPlaylistTypes[pt] {
@@ -404,11 +405,11 @@ func (p *Playlist) HandlePrefetchCovers(w http.ResponseWriter, r *http.Request) 
 			var err error
 			switch pt {
 			case "on-repeat":
-				tracks, err = fetchOnRepeatTracks(body.User)
+				tracks, err = fetchOnRepeatTracks(body.User, coverArtSize)
 			case "fresh-releases":
-				tracks, err = fetchFreshReleaseTracks(body.User)
+				tracks, err = fetchFreshReleaseTracks(body.User, coverArtSize)
 			default:
-				tracks, err = fetchMostRecentLBPlaylist(body.User, pt)
+				tracks, err = fetchMostRecentLBPlaylist(body.User, pt, coverArtSize)
 			}
 			if err != nil {
 				slog.Warn("prefetch: failed to fetch LB playlist", "type", pt, "err", err)

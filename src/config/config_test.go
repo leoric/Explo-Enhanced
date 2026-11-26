@@ -89,3 +89,29 @@ func TestPlaylistNamesFromEnvFile(t *testing.T) {
 		t.Fatalf("DailyJams = %q", got)
 	}
 }
+
+func TestNormalizeCoverArtSize(t *testing.T) {
+	cases := map[string]string{
+		"250": "250", "500": "500", "1200": "1200",
+		"": "250", " 500 ": "500", "large": "250",
+		"1000": "1200", "300": "250", "600": "500", "4000": "1200", "0": "250",
+	}
+	for in, want := range cases {
+		if got := NormalizeCoverArtSize(in); got != want {
+			t.Errorf("NormalizeCoverArtSize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCommonFixesCoverArtSize(t *testing.T) {
+	var cfg Config
+	cfg.DiscoveryCfg.Listenbrainz.CoverArtSize = "1000"
+	cfg.ServerCfg.WebDataDir = "/opt/explo/config/"
+	cfg.CommonFixes()
+	if got := cfg.DiscoveryCfg.Listenbrainz.CoverArtSize; got != "1200" {
+		t.Fatalf("CoverArtSize = %q, want 1200", got)
+	}
+	if cfg.DownloadCfg.Slskd.CoversDir != "/opt/explo/config/cache/covers" || cfg.DownloadCfg.Slskd.CoversDir != cfg.DownloadCfg.Youtube.CoversDir {
+		t.Fatalf("Slskd.CoversDir = %q, want the shared covers dir", cfg.DownloadCfg.Slskd.CoversDir)
+	}
+}

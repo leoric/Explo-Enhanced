@@ -292,7 +292,7 @@ func (c *ListenBrainz) getTopRecordings(user string) ([]*models.Track, error) {
 	for _, rec := range resp.Payload.Recordings {
 		var coverURL string
 		if rec.ReleaseMbid != "" {
-			coverURL = fmt.Sprintf("https://coverartarchive.org/release/%s/front-%s", rec.ReleaseMbid, c.cfg.CoverArtSize)
+			coverURL = fmt.Sprintf("https://coverartarchive.org/release/%s/front-%s", rec.ReleaseMbid, c.coverSize())
 		}
 		tracks = append(tracks, &models.Track{
 			Title:              rec.TrackName,
@@ -631,15 +631,21 @@ func (c *ListenBrainz) getImportPlaylist(user string) (string, error) {
 }
 
 
+// coverSize returns the Cover Art Archive thumbnail size for cover URLs. Never empty:
+// a URL without a valid size returns the full-size original image.
+func (c *ListenBrainz) coverSize() string {
+	return cfg.NormalizeCoverArtSize(c.cfg.CoverArtSize)
+}
+
 // FetchPlaylistByMBID fetches a LB playlist by MBID. For use outside the discovery flow.
-func FetchPlaylistByMBID(httpClient *util.HttpClient, mbid string) (string, []*models.Track, error) {
-	lb := &ListenBrainz{HttpClient: httpClient}
+func FetchPlaylistByMBID(httpClient *util.HttpClient, mbid, coverArtSize string) (string, []*models.Track, error) {
+	lb := &ListenBrainz{HttpClient: httpClient, cfg: cfg.Listenbrainz{CoverArtSize: coverArtSize}}
 	return lb.parsePlaylist(mbid, false)
 }
 
 // FetchTopRecordings returns the user's top recordings for the current month.
-func FetchTopRecordings(httpClient *util.HttpClient, user string) ([]*models.Track, error) {
-	lb := &ListenBrainz{HttpClient: httpClient}
+func FetchTopRecordings(httpClient *util.HttpClient, user, coverArtSize string) ([]*models.Track, error) {
+	lb := &ListenBrainz{HttpClient: httpClient, cfg: cfg.Listenbrainz{CoverArtSize: coverArtSize}}
 	return lb.getTopRecordings(user)
 }
 
@@ -651,8 +657,8 @@ func EnrichTracks(httpClient *util.HttpClient, lbCfg cfg.Listenbrainz, tracks []
 }
 
 // FetchMostRecentPlaylistByType finds and fetches the most recent LB-generated playlist of the given type for the user.
-func FetchMostRecentPlaylistByType(httpClient *util.HttpClient, user, playlistType string) ([]*models.Track, error) {
-	lb := &ListenBrainz{HttpClient: httpClient, cfg: cfg.Listenbrainz{ImportPlaylist: playlistType}}
+func FetchMostRecentPlaylistByType(httpClient *util.HttpClient, user, playlistType, coverArtSize string) ([]*models.Track, error) {
+	lb := &ListenBrainz{HttpClient: httpClient, cfg: cfg.Listenbrainz{ImportPlaylist: playlistType, CoverArtSize: coverArtSize}}
 	id, err := lb.getImportPlaylist(user)
 	if err != nil {
 		return nil, err
@@ -688,7 +694,7 @@ func (c *ListenBrainz) parsePlaylist(identifier string, singleArtist bool) (stri
 		var coverURL string
 		if trackMeta.CaaReleaseMbid != "" && trackMeta.CaaID != 0 {
 			coverURL = fmt.Sprintf("https://coverartarchive.org/release/%s/%d-%s.jpg",
-				trackMeta.CaaReleaseMbid, trackMeta.CaaID, c.cfg.CoverArtSize)
+				trackMeta.CaaReleaseMbid, trackMeta.CaaID, c.coverSize())
 		}
 
 		if len(trackMeta.Artists) > 1 {

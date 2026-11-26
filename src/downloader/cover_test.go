@@ -134,12 +134,15 @@ func TestEmbedAndReplaceCover(t *testing.T) {
 func TestCoverToEmbed(t *testing.T) {
 	requireFFmpeg(t)
 	dir := t.TempDir()
+	coversDir := filepath.Join(dir, "covers")
 	cover := makeCover(t, dir, "cover.jpg", "16x16")
 	data, err := os.ReadFile(cover)
 	if err != nil {
 		t.Fatal(err)
 	}
+	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
 		if r.URL.Path != "/release/abc/front-500" {
 			http.NotFound(w, r)
 			return
@@ -147,7 +150,9 @@ func TestCoverToEmbed(t *testing.T) {
 		_, _ = w.Write(data)
 	}))
 	defer srv.Close()
-	track := &models.Track{CleanTitle: "Song", CoverURL: srv.URL + "/release/abc/front-500"}
+	newTrack := func() *models.Track {
+		return &models.Track{CleanTitle: "Song", CoverURL: srv.URL + "/release/abc/front-500"}
+	}
 
 	bare := makeAudio(t, dir, "bare.flac")
 	withCover := makeAudio(t, dir, "covered.flac")
@@ -155,60 +160,75 @@ func TestCoverToEmbed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// no cover yet: fetched to a temp file, removed by cleanup
-	got, cleanup := coverToEmbed(srv.Client(), bare, track, false)
-	if got == "" {
-		t.Fatal("expected a cover for a file without one")
+	// not cached yet: downloaded into the shared cache, named by release like the web UI does
+	track := newTrack()
+	got := coverToEmbed(bare, track, coversDir, false)
+	if want := filepath.Join(coversDir, "abc.jpg"); got != want || track.CoverPath != want {
+		t.Fatalf("cover %q, CoverPath %q; want %q", got, track.CoverPath, want)
 	}
 	if b, err := os.ReadFile(got); err != nil || len(b) != len(data) {
-		t.Fatalf("temp cover not written correctly: %v", err)
+		t.Fatalf("cached cover not written correctly: %v", err)
 	}
-	cleanup()
-	if _, err := os.Stat(got); !os.IsNotExist(err) {
-		t.Fatal("temp cover not removed")
+
+	// cached: reused without another request
+	track = newTrack()
+	if got := coverToEmbed(bare, track, coversDir, false); got != filepath.Join(coversDir, "abc.jpg") || requests != 1 {
+		t.Fatalf("cover %q after %d requests; want cached file after 1 request", got, requests)
 	}
 
 	// existing cover kept unless replacing
-	if got, _ := coverToEmbed(srv.Client(), withCover, track, false); got != "" {
+	if got := coverToEmbed(withCover, newTrack(), coversDir, false); got != "" {
 		t.Fatal("existing cover should be kept without replace")
 	}
-	got, cleanup = coverToEmbed(srv.Client(), withCover, track, true)
-	defer cleanup()
-	if got == "" {
+	if got := coverToEmbed(withCover, newTrack(), coversDir, true); got == "" {
 		t.Fatal("expected a cover when replacing")
 	}
 
 	// unsupported format, remote error, no cover at all
-	if got, _ := coverToEmbed(srv.Client(), filepath.Join(dir, "x.opus"), track, true); got != "" {
+	if got := coverToEmbed(filepath.Join(dir, "x.opus"), newTrack(), coversDir, true); got != "" {
 		t.Fatal("opus should be skipped")
 	}
 	missing := &models.Track{CoverURL: srv.URL + "/release/missing/front-500"}
-	if got, _ := coverToEmbed(srv.Client(), bare, missing, false); got != "" {
+	if got := coverToEmbed(bare, missing, coversDir, false); got != "" {
 		t.Fatal("404 cover should be skipped")
 	}
-	if got, _ := coverToEmbed(srv.Client(), bare, &models.Track{}, false); got != "" {
+	if got := coverToEmbed(bare, &models.Track{}, coversDir, false); got != "" {
 		t.Fatal("track without cover should be skipped")
 	}
 }
 
-func TestFetchCoverFallsBackToCachedFile(t *testing.T) {
+func TestCachedCover(t *testing.T) {
 	dir := t.TempDir()
 	cached := filepath.Join(dir, "abc.jpg")
 	if err := os.WriteFile(cached, []byte("jpeg"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	got, cleanup, err := fetchCover(http.DefaultClient, &models.Track{CoverURL: "/api/covers/abc.jpg", CoverPath: cached})
+	// already cached by the playlist run (CoverURL is then the UI's API path)
+	got, err := cachedCover(&models.Track{CoverURL: "/api/covers/abc.jpg", CoverPath: cached}, dir)
 	if err != nil || got != cached {
 		t.Fatalf("got %q, %v; want cached file", got, err)
 	}
-	cleanup()
-	if _, err := os.Stat(cached); err != nil {
-		t.Fatal("cleanup must not remove the cached cover")
-	}
 
-	_, _, err = fetchCover(http.DefaultClient, &models.Track{CoverURL: "/api/covers/abc.jpg", CoverPath: filepath.Join(dir, "gone.jpg")})
+	// no remote URL to fetch a missing file from
+	_, err = cachedCover(&models.Track{CoverURL: "/api/covers/abc.jpg", CoverPath: filepath.Join(dir, "gone.jpg")}, dir)
 	if !errors.Is(err, errNoCover) {
 		t.Fatalf("err = %v, want errNoCover", err)
+	}
+
+	// oversized original in the cache is not embedded
+	original := filepath.Join(dir, "orig.jpg")
+	f, err := os.Create(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxEmbedCoverBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cachedCover(&models.Track{CoverPath: original}, dir); err == nil {
+		t.Fatal("oversized cover should be rejected")
 	}
 }

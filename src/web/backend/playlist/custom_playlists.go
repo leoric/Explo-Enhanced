@@ -120,7 +120,7 @@ type FetchResult struct {
 
 // fetchCustomPlaylistTracks dispatches to the appropriate source fetcher.
 // This is the single point where source-specific logic lives for fetching.
-func fetchCustomPlaylistTracks(p CustomPlaylist, enabled bool) (FetchResult, error) {
+func fetchCustomPlaylistTracks(p CustomPlaylist, enabled bool, coverArtSize string) (FetchResult, error) {
 	switch p.Source {
 	case "apple_music":
 		name, art, tracks, err := fetchAppleMusicPlaylist(p.SourceURL, enabled)
@@ -141,7 +141,7 @@ func fetchCustomPlaylistTracks(p CustomPlaylist, enabled bool) (FetchResult, err
 			return FetchResult{}, fmt.Errorf("no source data for playlist %s", p.ID)
 		}
 		httpClient := util.NewHttp(util.HttpClientConfig{Timeout: 30})
-		name, modelTracks, err := discovery.FetchPlaylistByMBID(httpClient, mbid)
+		name, modelTracks, err := discovery.FetchPlaylistByMBID(httpClient, mbid, coverArtSize)
 		if err != nil {
 			return FetchResult{}, err
 		}

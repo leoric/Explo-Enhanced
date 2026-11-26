@@ -587,9 +587,7 @@ func (c *Slskd) MoveDownload(srcDir, destDir, trackPath string, track *models.Tr
 	}
 	var coverPath string
 	if c.Cfg.EmbedCoverArt { // existing covers are only replaced when overwriting metadata
-		var removeCover func()
-		coverPath, removeCover = coverToEmbed(c.HttpClient.Client, srcFile, track, c.Cfg.OverwriteMetadata)
-		defer removeCover()
+		coverPath = coverToEmbed(srcFile, track, c.Cfg.CoversDir, c.Cfg.OverwriteMetadata)
 	}
 	if c.Cfg.OverwriteMetadata || coverPath != "" {
 		err := overwriteMetadata(metadata, coverPath, srcFile)

@@ -4,15 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"explo/src/models"
+	"explo/src/util"
 
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
@@ -22,39 +21,41 @@ var errNoCover = errors.New("track has no cover art")
 // formats whose ffmpeg muxers can store an attached cover picture
 var coverFormats = map[string]bool{"mp3": true, "flac": true, "m4a": true}
 
-// coverToEmbed returns the path of a cover image to embed into file, or "" if none should be embedded.
-// Files that already have a cover keep it unless replace is set. The returned func removes temp files.
-func coverToEmbed(client *http.Client, file string, track *models.Track, replace bool) (string, func()) {
-	noop := func() {}
+// cached covers above this size are full-size originals (e.g. cached before COVER_ART_SIZE was
+// validated) and aren't embedded. Cover Art Archive thumbnails stay well below it, even at 1200px.
+const maxEmbedCoverBytes = 4 << 20
 
+// coverToEmbed returns the path of a cover image to embed into file, or "" if none should be embedded.
+// Files that already have a cover keep it unless replace is set.
+func coverToEmbed(file string, track *models.Track, coversDir string, replace bool) string {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(file), "."))
 	if !coverFormats[ext] {
 		slog.Debug("cover embedding not supported for format", "file", file)
-		return "", noop
+		return ""
 	}
 
 	if !replace {
 		hasCover, err := hasEmbeddedCover(file)
 		if err != nil {
 			slog.Warn("could not check for embedded cover, leaving it as is", "file", file, "context", err.Error())
-			return "", noop
+			return ""
 		}
 		if hasCover {
 			slog.Debug("file already has a cover", "file", file)
-			return "", noop
+			return ""
 		}
 	}
 
-	coverPath, cleanup, err := fetchCover(client, track)
+	coverPath, err := cachedCover(track, coversDir)
 	if errors.Is(err, errNoCover) {
 		slog.Debug("no cover art to embed", "title", track.CleanTitle, "artist", track.MainArtist)
-		return "", noop
+		return ""
 	}
 	if err != nil {
-		slog.Warn("failed to fetch cover art", "title", track.CleanTitle, "artist", track.MainArtist, "context", err.Error())
-		return "", noop
+		slog.Warn("not embedding cover art", "title", track.CleanTitle, "artist", track.MainArtist, "context", err.Error())
+		return ""
 	}
-	return coverPath, cleanup
+	return coverPath
 }
 
 // hasEmbeddedCover reports whether file contains a picture stream
@@ -74,49 +75,39 @@ func hasEmbeddedCover(file string) (bool, error) {
 	return len(probe.Streams) > 0, nil
 }
 
-// fetchCover downloads the track's remote cover (sized by COVER_ART_SIZE) to a temp file.
-// It falls back to an already cached cover file when there's no remote URL (custom playlists).
-func fetchCover(client *http.Client, track *models.Track) (string, func(), error) {
-	noop := func() {}
-
-	if strings.HasPrefix(track.CoverURL, "http://") || strings.HasPrefix(track.CoverURL, "https://") {
-		resp, err := client.Get(track.CoverURL) //nolint:noctx
-		if err != nil {
-			return "", noop, err
+// cachedCover returns the track's cover from the shared covers cache (the same file the web UI uses),
+// downloading it into the cache if it isn't there yet
+func cachedCover(track *models.Track, coversDir string) (string, error) {
+	if !fileExists(track.CoverPath) {
+		if !strings.HasPrefix(track.CoverURL, "http://") && !strings.HasPrefix(track.CoverURL, "https://") {
+			return "", errNoCover
 		}
-		defer func() {
-			if err := resp.Body.Close(); err != nil {
-				slog.Debug("failed to close cover response", "context", err.Error())
-			}
-		}()
-		if resp.StatusCode != http.StatusOK {
-			return "", noop, fmt.Errorf("got %d from %s", resp.StatusCode, track.CoverURL)
+		if coversDir == "" {
+			return "", fmt.Errorf("no covers directory configured")
 		}
-
-		f, err := os.CreateTemp("", "explo-cover-*.jpg")
-		if err != nil {
-			return "", noop, err
+		if err := os.MkdirAll(coversDir, 0755); err != nil {
+			return "", err
 		}
-		cleanup := func() {
-			if err := os.Remove(f.Name()); err != nil {
-				slog.Debug("failed to remove temp cover", "context", err.Error())
-			}
-		}
-		_, err = io.Copy(f, resp.Body)
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			cleanup()
-			return "", noop, fmt.Errorf("failed to save cover: %w", err)
-		}
-		return f.Name(), cleanup, nil
-	}
-
-	if track.CoverPath != "" {
-		if info, err := os.Stat(track.CoverPath); err == nil && info.Size() > 0 {
-			return track.CoverPath, noop, nil
+		_, track.CoverPath = util.DownloadCover(track.CoverURL, coversDir)
+		if !fileExists(track.CoverPath) {
+			return "", fmt.Errorf("failed to download %s", track.CoverURL)
 		}
 	}
-	return "", noop, errNoCover
+
+	info, err := os.Stat(track.CoverPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > maxEmbedCoverBytes {
+		return "", fmt.Errorf("cached cover %s is %d MB, likely a full-size original; delete it from the covers cache to fetch it at COVER_ART_SIZE", track.CoverPath, info.Size()>>20)
+	}
+	return track.CoverPath, nil
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
