@@ -136,6 +136,7 @@ type DownloadConfig struct {
 	KeepPermissions   bool     `env:"KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	RenameTrack       bool     `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format
 	UseSubDir         bool     `env:"USE_SUBDIRECTORY" env-default:"true"`
+	KeepersDir        string   `env:"KEEPERS_DIR"` // --clean-downloads moves starred/playlisted tracks here instead of deleting them
 	Discovery         string   `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
 	Services          []string `env:"DOWNLOAD_SERVICES" env-default:"youtube"`
 }
@@ -414,6 +415,21 @@ func (cfg *Config) GenPlaylistDetails() {
 			cfg.DownloadCfg.DownloadDir,
 			defaultName)
 	}
+}
+
+// ExploPlaylistNames returns the names of the playlists Explo manages: the current run's playlist and
+// every playlist type enabled in the .env (<TYPE>_FLAGS set), named by <TYPE>_NAME or the default name
+func (cfg *Config) ExploPlaylistNames() []string {
+	names := []string{cfg.ClientCfg.PlaylistName}
+	for _, playlistType := range validPlaylists {
+		prefix := strings.ToUpper(strings.ReplaceAll(playlistType, "-", "_"))
+		if strings.TrimSpace(os.Getenv(prefix+"_FLAGS")) == "" {
+			continue
+		}
+		base := cfg.ClientCfg.PlaylistNames.ForType(playlistType)
+		names = append(names, getPlaylistName(playlistType, base, cfg.ClientCfg.PlaylistNFormat, true, time.Now()))
+	}
+	return names
 }
 
 // getPlaylistName builds the playlist name; base overrides the title-cased playlist type if set

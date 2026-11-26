@@ -39,3 +39,10 @@ type Track struct {
 	MusicBrainzReleaseTrackID string
 	MusicBrainzArtistID       string
 }
+
+// LibrarySong identifies a song in the media server's library
+type LibrarySong struct {
+	RecordingID string // MusicBrainz recording ID, empty if the server doesn't know it
+	Title       string
+	Artist      string
+}

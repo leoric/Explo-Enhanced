@@ -105,6 +105,12 @@ type InPlaceReplacer interface {
 	ReplacesInPlace() bool
 }
 
+// KeeperFinder is implemented by systems that can list the songs the user wants to keep:
+// starred songs and songs in the user's own playlists, except smart playlists and the ones named in exclude.
+type KeeperFinder interface {
+	KeeperSongs(exclude []string) ([]models.LibrarySong, error)
+}
+
 // NewClient initializes a client and sets up authentication
 func NewClient(cfg *config.Config) (*Client, error) {
 	c := &Client{

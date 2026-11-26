@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +114,23 @@ func TestCommonFixesCoverArtSize(t *testing.T) {
 	}
 	if cfg.DownloadCfg.Slskd.CoversDir != "/opt/explo/config/cache/covers" || cfg.DownloadCfg.Slskd.CoversDir != cfg.DownloadCfg.Youtube.CoversDir {
 		t.Fatalf("Slskd.CoversDir = %q, want the shared covers dir", cfg.DownloadCfg.Slskd.CoversDir)
+	}
+}
+
+func TestExploPlaylistNames(t *testing.T) {
+	t.Setenv("WEEKLY_EXPLORATION_FLAGS", "--playlist weekly-exploration")
+	t.Setenv("WEEKLY_JAMS_FLAGS", "--playlist weekly-jams")
+	t.Setenv("DAILY_JAMS_FLAGS", "")
+	t.Setenv("ON_REPEAT_FLAGS", " ")
+	t.Setenv("FRESH_RELEASES_FLAGS", "")
+
+	var cfg Config
+	cfg.ClientCfg.PlaylistName = "Test Mix-2026-Week48" // current run, e.g. --replace-playlist=false
+	cfg.ClientCfg.PlaylistNames.WeeklyExploration = "Discover Weekly"
+
+	got := cfg.ExploPlaylistNames()
+	want := []string{"Test Mix-2026-Week48", "Discover Weekly", "Weekly-Jams"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

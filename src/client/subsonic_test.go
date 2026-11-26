@@ -20,6 +20,9 @@ type fakeSubsonic struct {
 	playlists []Playlist
 	nextID    int
 	songs     map[string][]map[string]any // search3 results per query
+	starred   []map[string]any            // getStarred2 songs
+	entries   map[string][]map[string]any // getPlaylist songs per playlist ID
+	smart     map[string]bool             // playlists that only report validUntil once getPlaylist evaluates them
 	calls     []string                    // endpoint + relevant params, in order
 }
 
@@ -62,6 +65,17 @@ func (f *fakeSubsonic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "search3":
 		f.calls = append(f.calls, "search3 query="+q.Get("query"))
 		resp["searchResult3"] = map[string]any{"song": f.songs[q.Get("query")]}
+	case "getStarred2":
+		f.calls = append(f.calls, endpoint)
+		resp["starred2"] = map[string]any{"song": f.starred}
+	case "getPlaylist":
+		id := q.Get("id")
+		f.calls = append(f.calls, "getPlaylist id="+id)
+		pl := map[string]any{"id": id, "entry": f.entries[id]}
+		if f.smart[id] {
+			pl["validUntil"] = "2026-11-27T00:00:00Z"
+		}
+		resp["playlist"] = pl
 	case "deletePlaylist":
 		f.calls = append(f.calls, "deletePlaylist id="+q.Get("id"))
 	case "updatePlaylist":
@@ -239,5 +253,64 @@ func TestSubsonicSearchSongsOrder(t *testing.T) {
 		if tracks[i].ID != w.id || tracks[i].Present != w.present {
 			t.Errorf("track %d: id=%q present=%v, want %q/%v", i, tracks[i].ID, tracks[i].Present, w.id, w.present)
 		}
+	}
+}
+
+func TestSubsonicKeeperSongs(t *testing.T) {
+	song := func(mbid, title string) map[string]any {
+		return map[string]any{"id": title, "title": title, "artist": "Test Band", "musicBrainzId": mbid}
+	}
+	fake := &fakeSubsonic{
+		playlists: []Playlist{
+			{ID: "mine", Name: "Favourites", Owner: "me"},
+			{ID: "explo", Name: "Discover Weekly", Owner: "me"},
+			{ID: "theirs", Name: "Party", Owner: "someone-else"},
+			{ID: "smart-listed", Name: "Recently Added", Owner: "me", ValidUntil: "2026-11-27T00:00:00Z"},
+			{ID: "smart-unevaluated", Name: "Top Rated", Owner: "me"},
+		},
+		starred: []map[string]any{song("mbid-starred", "Starred Song")},
+		entries: map[string][]map[string]any{
+			"mine":              {song("mbid-mine", "Common Song"), song("", "Untagged Song")},
+			"explo":             {song("mbid-explo", "Explo Song")},
+			"theirs":            {song("mbid-theirs", "Their Song")},
+			"smart-listed":      {song("mbid-smart", "Smart Song")},
+			"smart-unevaluated": {song("mbid-smart2", "Smart Song 2")},
+		},
+		smart: map[string]bool{"smart-listed": true, "smart-unevaluated": true},
+	}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	_, sub := newTestClient(t, srv.URL, "Discover Weekly")
+	songs, err := sub.KeeperSongs([]string{"Discover Weekly", "Weekly-Jams"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, s := range songs {
+		got = append(got, s.RecordingID+"/"+s.Title+"/"+s.Artist)
+	}
+	want := []string{"mbid-starred/Starred Song/Test Band", "mbid-mine/Common Song/Test Band", "/Untagged Song/Test Band"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("songs:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	assertCalls(t, fake.takeCalls(),
+		"getStarred2",
+		"getPlaylists",
+		"getPlaylist id=mine",
+		"getPlaylist id=smart-unevaluated",
+	)
+}
+
+func TestSubsonicKeeperSongsFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"subsonic-response":{"status":"failed","error":{"code":0,"message":"server error"}}}`))
+	}))
+	defer srv.Close()
+
+	_, sub := newTestClient(t, srv.URL, "Discover Weekly")
+	if _, err := sub.KeeperSongs(nil); err == nil {
+		t.Fatal("want error")
 	}
 }

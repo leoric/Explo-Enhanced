@@ -209,7 +209,7 @@ func main() {
 		}
 	}
 	if cfg.Flags.CleanDownloads && cfg.DownloadCfg.UseSubDir {
-		downloader.DeleteSongs()
+		cleanDownloads(&cfg, client, downloader, tracks)
 	}
 	if cfg.Flags.DownloadMode != "force" {
 		if err := client.CheckTracks(tracks); err != nil { // Check if tracks exist on system before downloading
@@ -234,6 +234,29 @@ func main() {
 		slog.Info("playlist created successfully", "system", cfg.System, "playlistName", cfg.ClientCfg.PlaylistName, "notify", true)
 		uploadCustomPlaylistArtwork(&cfg, client)
 	}
+}
+
+// cleanDownloads deletes the previous run's tracks, leaving the files of this run's tracks in place.
+// With KEEPERS_DIR set, starred tracks and tracks in the user's own playlists are moved there instead;
+// cleanup is skipped when they can't be determined.
+func cleanDownloads(cfg *config.Config, c *client.Client, d *downloader.DownloadClient, tracks []*models.Track) {
+	rules := downloader.NewCleanupRules(tracks)
+	if strings.TrimSpace(cfg.DownloadCfg.KeepersDir) == "" {
+		d.DeleteSongs(rules)
+		return
+	}
+	finder, ok := c.API.(client.KeeperFinder)
+	if !ok {
+		slog.Warn("KEEPERS_DIR is only supported for subsonic, skipping cleanup of downloaded tracks", "system", cfg.System, "notify", true)
+		return
+	}
+	songs, err := finder.KeeperSongs(cfg.ExploPlaylistNames())
+	if err != nil {
+		slog.Warn("could not get starred and playlisted songs, skipping cleanup of downloaded tracks", "context", err.Error(), "notify", true)
+		return
+	}
+	slog.Info("checking downloaded tracks against starred and playlisted songs", "songs", len(songs))
+	d.DeleteSongs(rules.WithKeepers(songs))
 }
 
 // enrichMissingTracks adds MusicBrainz metadata (ENRICH_TRACK_METADATA) to the tracks that will be

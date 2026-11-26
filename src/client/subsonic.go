@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,6 +63,29 @@ type Playlist struct {
 	Created   time.Time `json:"created"`
 	Changed   time.Time `json:"changed"`
 	CoverArt  string    `json:"coverArt"`
+	ValidUntil string   `json:"validUntil,omitempty"` // OpenSubsonic, only set on (evaluated) smart playlists
+}
+
+type subsonicSong struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Artist        string `json:"artist"`
+	MusicBrainzID string `json:"musicBrainzId"`
+}
+
+type keeperResp struct {
+	SubsonicResponse struct {
+		Starred2 struct {
+			Song []subsonicSong `json:"song"`
+		} `json:"starred2"`
+		Playlists struct {
+			Playlist []Playlist `json:"playlist"`
+		} `json:"playlists"`
+		Playlist struct {
+			Playlist
+			Entry []subsonicSong `json:"entry"`
+		} `json:"playlist"`
+	} `json:"subsonic-response"`
 }
 
 type ScanState struct {
@@ -328,6 +352,55 @@ func (c *Subsonic) DeletePlaylist() error {
 		return err
 	}
 	return nil
+}
+
+// KeeperSongs returns the user's starred songs and the songs in their own playlists,
+// skipping smart playlists and the playlists named in exclude
+func (c *Subsonic) KeeperSongs(exclude []string) ([]models.LibrarySong, error) {
+	var starred keeperResp
+	if err := c.getKeeperResp("getStarred2?f=json", &starred); err != nil {
+		return nil, fmt.Errorf("getStarred2: %w", err)
+	}
+	songs := toLibrarySongs(starred.SubsonicResponse.Starred2.Song)
+	slog.Debug("found starred songs", "songs", len(songs))
+
+	var lists keeperResp
+	if err := c.getKeeperResp("getPlaylists?f=json", &lists); err != nil {
+		return nil, fmt.Errorf("getPlaylists: %w", err)
+	}
+	for _, p := range lists.SubsonicResponse.Playlists.Playlist {
+		// getPlaylists also returns other users' public playlists
+		if !strings.EqualFold(p.Owner, c.Cfg.Creds.User) || slices.Contains(exclude, p.Name) || p.ValidUntil != "" {
+			continue
+		}
+		var list keeperResp
+		if err := c.getKeeperResp("getPlaylist?id="+url.QueryEscape(p.ID)+"&f=json", &list); err != nil {
+			return nil, fmt.Errorf("getPlaylist %q: %w", p.Name, err)
+		}
+		if list.SubsonicResponse.Playlist.ValidUntil != "" { // smart playlist, evaluated by this request
+			continue
+		}
+		entries := list.SubsonicResponse.Playlist.Entry
+		slog.Debug("found playlist songs", "playlist", p.Name, "songs", len(entries))
+		songs = append(songs, toLibrarySongs(entries)...)
+	}
+	return songs, nil
+}
+
+func (c *Subsonic) getKeeperResp(reqParams string, resp *keeperResp) error {
+	body, err := c.subsonicRequest(reqParams)
+	if err != nil {
+		return err
+	}
+	return util.ParseResp(body, resp)
+}
+
+func toLibrarySongs(songs []subsonicSong) []models.LibrarySong {
+	out := make([]models.LibrarySong, 0, len(songs))
+	for _, s := range songs {
+		out = append(out, models.LibrarySong{RecordingID: s.MusicBrainzID, Title: s.Title, Artist: s.Artist})
+	}
+	return out
 }
 
 func (c *Subsonic) subsonicRequest(reqParams string) ([]byte, error) {

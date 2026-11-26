@@ -41,12 +41,12 @@ func TestCleanPlaylistDirNested(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, removedDirs, kept, err := cleanPlaylistDir(root+"/", dir, testExts)
+	res, err := cleanPlaylistDir(root+"/", dir, testExts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted != 4 || removedDirs != 4 || kept != 2 {
-		t.Fatalf("deleted=%d removedDirs=%d kept=%d, want 4/4/2", deleted, removedDirs, kept)
+	if res != (cleanResult{deleted: 4, removedDirs: 4, kept: 2}) {
+		t.Fatalf("got %+v, want 4 deleted, 4 removed dirs, 2 kept", res)
 	}
 
 	for _, p := range []string{
@@ -76,12 +76,12 @@ func TestCleanPlaylistDirFlat(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "a.flac"))
 	writeFile(t, filepath.Join(dir, "b.mp3"))
 
-	deleted, removedDirs, kept, err := cleanPlaylistDir(root, dir, testExts)
+	res, err := cleanPlaylistDir(root, dir, testExts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted != 2 || removedDirs != 0 || kept != 0 {
-		t.Fatalf("deleted=%d removedDirs=%d kept=%d, want 2/0/0", deleted, removedDirs, kept)
+	if res != (cleanResult{deleted: 2}) {
+		t.Fatalf("got %+v, want 2 deleted", res)
 	}
 	if !exists(dir) {
 		t.Fatal("playlist dir should be kept")
@@ -90,9 +90,9 @@ func TestCleanPlaylistDirFlat(t *testing.T) {
 
 func TestCleanPlaylistDirMissing(t *testing.T) {
 	root := t.TempDir()
-	deleted, _, _, err := cleanPlaylistDir(root, filepath.Join(root, "Weekly-Exploration"), testExts)
-	if err != nil || deleted != 0 {
-		t.Fatalf("deleted=%d err=%v, want 0/nil", deleted, err)
+	res, err := cleanPlaylistDir(root, filepath.Join(root, "Weekly-Exploration"), testExts, nil)
+	if err != nil || res.deleted != 0 {
+		t.Fatalf("deleted=%d err=%v, want 0/nil", res.deleted, err)
 	}
 }
 
@@ -112,9 +112,9 @@ func TestCleanPlaylistDirGuard(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			deleted, _, _, err := cleanPlaylistDir(tc.root, tc.dir, testExts)
-			if err == nil || deleted != 0 {
-				t.Fatalf("deleted=%d err=%v, want error and nothing deleted", deleted, err)
+			res, err := cleanPlaylistDir(tc.root, tc.dir, testExts, nil)
+			if err == nil || res.deleted != 0 {
+				t.Fatalf("deleted=%d err=%v, want error and nothing deleted", res.deleted, err)
 			}
 		})
 	}
