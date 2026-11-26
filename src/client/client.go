@@ -239,6 +239,11 @@ func (c *Client) CreatePlaylist(tracks []*models.Track) error {
 	if err := c.API.SearchSongs(tracks); err != nil { // search newly added songs
 		slog.Warn("SearchSongs failed", "context", err)
 	}
+	for _, track := range tracks {
+		if !track.Present {
+			slog.Info("track not found in library, leaving it out of the playlist", "system", c.System, "title", track.CleanTitle, "artist", track.MainArtist)
+		}
+	}
 	if err := c.API.CreatePlaylist(tracks); err != nil {
 		return fmt.Errorf("[%s] failed to create playlist: %s", c.System, err.Error())
 	}

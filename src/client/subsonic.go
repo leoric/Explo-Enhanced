@@ -127,65 +127,73 @@ func (c *Subsonic) AddLibrary() error {
 
 func (c *Subsonic) SearchSongs(tracks []*models.Track) error {
 	for _, track := range tracks {
-		searchQuery := util.CleanSearchTitle(track.CleanTitle)
-		reqParam := fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(searchQuery))
-
-		body, err := c.subsonicRequest(reqParam)
-		if err != nil {
-			return err
+		// most specific first: the MusicBrainz recording ID matches exactly, while a title search
+		// only returns the server's first results, which can miss the track for common titles.
+		// Title + artist narrows those results; the bare title catches differently spelled artists.
+		var queries []string
+		if track.MusicBrainzTrackID != "" {
+			queries = append(queries, track.MusicBrainzTrackID)
 		}
-
-		var resp SubResponse
-		if err := util.ParseResp(body, &resp); err != nil {
-			return err
+		title := util.CleanSearchTitle(track.CleanTitle)
+		if artist := strings.TrimSpace(track.MainArtist); artist != "" {
+			queries = append(queries, title+" "+artist)
 		}
+		queries = append(queries, title)
 
-		songs := resp.SubsonicResponse.SearchResult3.Song
-
-		if len(songs) == 0 {
-			if track.MusicBrainzTrackID != "" {
-				slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)
-				reqParam = fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(track.MusicBrainzTrackID))
-				body, err = c.subsonicRequest(reqParam)
-				if err != nil {
-					return err
-				}
-
-				if err := util.ParseResp(body, &resp); err != nil {
-					return err
-				}
-
-				songs = resp.SubsonicResponse.SearchResult3.Song
+		for _, searchQuery := range queries {
+			matched, err := c.searchSong(track, searchQuery)
+			if err != nil {
+				return err
 			}
-
-			if len(songs) == 0 {
-				slog.Debug("no results returned for query", "query", searchQuery, "trackArtist", track.MainArtist, "trackAlbum", track.Album)
-				continue
+			if matched {
+				break
 			}
 		}
-		
-		searchData := make([]SearchResult, 0, len(songs))
-		for _, song := range songs {
-			searchData = append(searchData, SearchResult{
-				ID: song.ID,
-				Title: song.Title,
-				Album: song.Album,
-				Artist: song.Artist,
-				Path: song.Path,
-				Duration: song.Duration,
-				MBID: song.MusicBrainzID,
-			})
-		}
-		trackMatch, ok := BestMatch(track, searchData, c.Cfg.MatchScore)
-		if !ok {
-			slog.Debug("failed to find match, no results returned above threshold score", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery)
-			continue
-		}
-		track.ID = trackMatch.ID
-		track.Present = true
-		slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
 	}
 	return nil
+}
+
+// searchSong runs one search3 query and, on a match above the score threshold, marks track as present
+func (c *Subsonic) searchSong(track *models.Track, searchQuery string) (bool, error) {
+	reqParam := fmt.Sprintf("search3?query=%s&f=json", url.QueryEscape(searchQuery))
+
+	body, err := c.subsonicRequest(reqParam)
+	if err != nil {
+		return false, err
+	}
+
+	var resp SubResponse
+	if err := util.ParseResp(body, &resp); err != nil {
+		return false, err
+	}
+
+	songs := resp.SubsonicResponse.SearchResult3.Song
+	if len(songs) == 0 {
+		slog.Debug("no results returned for query", "query", searchQuery, "trackArtist", track.MainArtist, "trackAlbum", track.Album)
+		return false, nil
+	}
+
+	searchData := make([]SearchResult, 0, len(songs))
+	for _, song := range songs {
+		searchData = append(searchData, SearchResult{
+			ID: song.ID,
+			Title: song.Title,
+			Album: song.Album,
+			Artist: song.Artist,
+			Path: song.Path,
+			Duration: song.Duration,
+			MBID: song.MusicBrainzID,
+		})
+	}
+	trackMatch, ok := BestMatch(track, searchData, c.Cfg.MatchScore)
+	if !ok {
+		slog.Debug("failed to find match, no results returned above threshold score", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery)
+		return false, nil
+	}
+	track.ID = trackMatch.ID
+	track.Present = true
+	slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
+	return true, nil
 }
 
 func (c *Subsonic) RefreshLibrary() error {

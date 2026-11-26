@@ -19,7 +19,8 @@ type fakeSubsonic struct {
 	mu        sync.Mutex
 	playlists []Playlist
 	nextID    int
-	calls     []string // endpoint + relevant params, in order
+	songs     map[string][]map[string]any // search3 results per query
+	calls     []string                    // endpoint + relevant params, in order
 }
 
 func (f *fakeSubsonic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +30,9 @@ func (f *fakeSubsonic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	user := q.Get("u")
 	resp := map[string]any{"status": "ok"}
-	fail := func(msg string) { resp = map[string]any{"status": "failed", "error": map[string]any{"code": 70, "message": msg}} }
+	fail := func(msg string) {
+		resp = map[string]any{"status": "failed", "error": map[string]any{"code": 70, "message": msg}}
+	}
 
 	switch endpoint := strings.TrimPrefix(r.URL.Path, "/rest/"); endpoint {
 	case "getPlaylists":
@@ -56,6 +59,9 @@ func (f *fakeSubsonic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.playlists = append(f.playlists, p)
 			resp["playlist"] = p
 		}
+	case "search3":
+		f.calls = append(f.calls, "search3 query="+q.Get("query"))
+		resp["searchResult3"] = map[string]any{"song": f.songs[q.Get("query")]}
 	case "deletePlaylist":
 		f.calls = append(f.calls, "deletePlaylist id="+q.Get("id"))
 	case "updatePlaylist":
@@ -80,7 +86,7 @@ func (f *fakeSubsonic) takeCalls() []string {
 // newTestClient returns a fresh client, as in a new explo run
 func newTestClient(t *testing.T, srvURL, name string) (*Client, *Subsonic) {
 	t.Helper()
-	cfg := config.ClientConfig{URL: srvURL, PlaylistName: name, Creds: config.Credentials{User: "me", Password: "pw"}}
+	cfg := config.ClientConfig{URL: srvURL, PlaylistName: name, MatchScore: 60, Creds: config.Credentials{User: "me", Password: "pw"}}
 	sub := NewSubsonic(cfg, util.NewHttp(util.HttpClientConfig{Timeout: 5}))
 	if err := sub.GetAuth(); err != nil {
 		t.Fatal(err)
@@ -190,4 +196,48 @@ func TestSubsonicDeleteWithoutIDIsNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCalls(t, fake.takeCalls())
+}
+
+func TestSubsonicSearchSongsOrder(t *testing.T) {
+	wanted := map[string]any{"id": "song-wanted", "title": "Common Song", "artist": "Test Band", "album": "Test Album", "musicBrainzId": "mbid-common", "path": "Test Band/Test Album/04 Common Song.mp3"}
+	other := map[string]any{"id": "song-other", "title": "Common Song", "artist": "Other Band", "album": "Other Album", "path": "Other Band/Other Album/01 Common Song.mp3"}
+	fake := &fakeSubsonic{songs: map[string][]map[string]any{
+		"mbid-common":         {wanted},
+		"Common Song":         {other}, // the wanted track isn't among the title results
+		"Rare Song Test Band": {{"id": "song-rare", "title": "Rare Song", "artist": "Test Band", "album": "Test Album", "path": "Test Band/Test Album/03 Rare Song.mp3"}},
+	}}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	_, sub := newTestClient(t, srv.URL, "x")
+
+	tracks := []*models.Track{
+		{CleanTitle: "Common Song", MainArtist: "Test Band", Album: "Test Album", MusicBrainzTrackID: "mbid-common"},
+		{CleanTitle: "Rare Song", MainArtist: "Test Band", Album: "Test Album", MusicBrainzTrackID: "mbid-not-tagged"},
+		{CleanTitle: "Rare Song", MainArtist: "Test Band", Album: "Test Album"},
+		{CleanTitle: "Common Song", MainArtist: "Test Band", Album: "Test Album"},
+		{CleanTitle: "Common Song", MainArtist: "Other Band", Album: "Other Album"}, // title + artist finds nothing
+	}
+	if err := sub.SearchSongs(tracks); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCalls(t, fake.takeCalls(),
+		"search3 query=mbid-common",     // ID matches, nothing else searched
+		"search3 query=mbid-not-tagged", // ID not found, falls back to title + artist
+		"search3 query=Rare Song Test Band",
+		"search3 query=Rare Song Test Band",    // no ID: title + artist matches
+		"search3 query=Common Song Test Band",  // no ID, not found by title + artist...
+		"search3 query=Common Song",            // ...nor among the title results
+		"search3 query=Common Song Other Band", // no results for title + artist...
+		"search3 query=Common Song",            // ...found by title alone
+	)
+	want := []struct {
+		id      string
+		present bool
+	}{{"song-wanted", true}, {"song-rare", true}, {"song-rare", true}, {"", false}, {"song-other", true}}
+	for i, w := range want {
+		if tracks[i].ID != w.id || tracks[i].Present != w.present {
+			t.Errorf("track %d: id=%q present=%v, want %q/%v", i, tracks[i].ID, tracks[i].Present, w.id, w.present)
+		}
+	}
 }
