@@ -234,13 +234,32 @@ func (c *Subsonic) CheckRefreshState() bool {
 	}
 }
 
+// ReplacesInPlace reports that an existing playlist's songs are replaced instead of deleting it, keeping its ID
+func (c *Subsonic) ReplacesInPlace() bool {
+	return true
+}
+
 func (c *Subsonic) CreatePlaylist(tracks []*models.Track) error {
 	var trackIDs strings.Builder
 	for _, track := range tracks { // build songID parameters
 		fmt.Fprintf(&trackIDs, "&songId=%s", track.ID)
 	}
 
-	reqParam := fmt.Sprintf("createPlaylist?name=%s%s&f=json", url.QueryEscape(c.Cfg.PlaylistName), trackIDs.String())
+	if c.Cfg.PlaylistID != "" { // replace songs of the existing playlist
+		err := c.createPlaylist("playlistId="+url.QueryEscape(c.Cfg.PlaylistID), trackIDs.String())
+		if err == nil {
+			return nil
+		}
+		slog.Warn("[subsonic] failed to replace playlist songs, creating a new playlist", "playlist", c.Cfg.PlaylistName, "id", c.Cfg.PlaylistID, "err", err.Error())
+		c.Cfg.PlaylistID = ""
+	}
+
+	return c.createPlaylist("name="+url.QueryEscape(c.Cfg.PlaylistName), trackIDs.String())
+}
+
+// createPlaylist sends createPlaylist with target (name=... or playlistId=...) and stores the returned ID
+func (c *Subsonic) createPlaylist(target, trackIDs string) error {
+	reqParam := fmt.Sprintf("createPlaylist?%s%s&f=json", target, trackIDs)
 
 	body, err := c.subsonicRequest(reqParam)
 	if err != nil {
@@ -251,8 +270,10 @@ func (c *Subsonic) CreatePlaylist(tracks []*models.Track) error {
 	if err := util.ParseResp(body, &resp); err != nil {
         return err
     }
-	
-	c.Cfg.PlaylistID = resp.SubsonicResponse.Playlist.ID
+
+	if id := resp.SubsonicResponse.Playlist.ID; id != "" {
+		c.Cfg.PlaylistID = id
+	}
 	return nil
 }
 
@@ -270,7 +291,8 @@ func (c *Subsonic) SearchPlaylist() error {
     }
 
 	for _, playlist := range resp.SubsonicResponse.Playlists.Playlist {
-		if playlist.Name == c.Cfg.PlaylistName {
+		// getPlaylists also returns other users' public playlists, only use our own
+		if playlist.Name == c.Cfg.PlaylistName && strings.EqualFold(playlist.Owner, c.Cfg.Creds.User) {
 			c.Cfg.PlaylistID = playlist.ID
 			return nil
 
@@ -289,6 +311,9 @@ func (c *Subsonic) UpdatePlaylist() error {
 }
 
 func (c *Subsonic) DeletePlaylist() error {
+	if c.Cfg.PlaylistID == "" {
+		return nil
+	}
 	reqParam := fmt.Sprintf("deletePlaylist?id=%s&f=json", c.Cfg.PlaylistID)
 
 	if _, err := c.subsonicRequest(reqParam); err != nil {
