@@ -176,22 +176,6 @@ func main() {
 		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)
 		if err == nil {
 			cfg.ClientCfg.PlaylistName = playlistName
-			hasMBIDs := func() bool {
-				for _, t := range tracks {
-					if t.MusicBrainzTrackID != "" {
-						return true
-					}
-				}
-				return false
-			}()
-			if cfg.DiscoveryCfg.Listenbrainz.EnrichTrackMetadata && hasMBIDs {
-				enriched, enrichErr := discovery.EnrichTracks(httpClient, cfg.DiscoveryCfg.Listenbrainz, tracks)
-				if enrichErr != nil {
-					slog.Warn("failed to enrich custom playlist metadata", "error", enrichErr)
-				} else {
-					tracks = enriched
-				}
-			}
 		}
 	} else {
 		disc := discovery.NewDiscoverer(cfg.DiscoveryCfg, httpClient)
@@ -234,6 +218,9 @@ func main() {
 	}
 
 	if cfg.Flags.DownloadMode != "skip" {
+		enrichMissingTracks(&cfg, tracks, func(t []*models.Track) ([]*models.Track, error) {
+			return discovery.EnrichTracks(httpClient, cfg.DiscoveryCfg.Listenbrainz, t)
+		})
 		downloader.StartDownload(&tracks)
 		if len(tracks) == 0 {
 			slog.Error("couldn't download any tracks", "notify", true)
@@ -246,6 +233,36 @@ func main() {
 	} else {
 		slog.Info("playlist created successfully", "system", cfg.System, "playlistName", cfg.ClientCfg.PlaylistName, "notify", true)
 		uploadCustomPlaylistArtwork(&cfg, client)
+	}
+}
+
+// enrichMissingTracks adds MusicBrainz metadata (ENRICH_TRACK_METADATA) to the tracks that will be
+// downloaded. It runs after the library check, so tracks already in the library aren't looked up.
+func enrichMissingTracks(cfg *config.Config, tracks []*models.Track, enrich func([]*models.Track) ([]*models.Track, error)) {
+	// fresh-releases tracks already carry MusicBrainz metadata
+	if !cfg.DiscoveryCfg.Listenbrainz.EnrichTrackMetadata || cfg.Flags.Playlist == "fresh-releases" {
+		return
+	}
+
+	var idx []int
+	var missing []*models.Track
+	for i, t := range tracks {
+		if !t.Present && t.MusicBrainzTrackID != "" {
+			idx = append(idx, i)
+			missing = append(missing, t)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	enriched, err := enrich(missing)
+	if err != nil {
+		slog.Warn("failed to enrich track metadata", "error", err)
+		return
+	}
+	for j, i := range idx { // enrichment returns new track structs, put them back in place
+		tracks[i] = enriched[j]
 	}
 }
 

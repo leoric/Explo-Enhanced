@@ -219,15 +219,7 @@ func (c *ListenBrainz) QueryTracks() ([]*models.Track, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Skip enrich for fresh-releases: tracksFromRelease already populated MB fields.
-		if c.cfg.ImportPlaylist == "on-repeat" && c.cfg.EnrichTrackMetadata && len(tracks) > 0 {
-			enrichedTracks, err := c.enrichTracks(tracks, c.cfg.SingleArtist)
-			if err != nil {
-				slog.Warn("failed to enrich playlist metadata", "error", err)
-			} else {
-				tracks = enrichedTracks
-			}
-		}
+		// metadata enrichment runs later, only for tracks that get downloaded (see main.go)
 		return tracks, nil
 	}
 
@@ -243,14 +235,6 @@ func (c *ListenBrainz) QueryTracks() ([]*models.Track, error) {
 		if err != nil {
 			return nil, err
 		}
-		if c.cfg.EnrichTrackMetadata && len(tracks) > 0 {
-			enrichedTracks, err := c.enrichTracks(tracks, c.cfg.SingleArtist)
-			if err != nil {
-				slog.Warn("failed to enrich playlist metadata", "error", err)
-			} else {
-				tracks = enrichedTracks
-			}
-		}
 
 	default:
 		mbids, err := c.getAPIRecommendations(c.cfg.User)
@@ -260,14 +244,6 @@ func (c *ListenBrainz) QueryTracks() ([]*models.Track, error) {
 		tracks, err = c.getTracks(mbids, c.cfg.SingleArtist)
 		if err != nil {
 			return nil, err
-		}
-		if c.cfg.EnrichTrackMetadata && len(tracks) > 0 {
-			enrichedTracks, err := c.enrichTracks(tracks, c.cfg.SingleArtist)
-			if err != nil {
-				slog.Warn("failed to enrich playlist metadata", "error", err)
-			} else {
-				tracks = enrichedTracks
-			}
 		}
 	}
 	return tracks, nil
@@ -573,6 +549,7 @@ func (c *ListenBrainz) enrichTracks(tracks []*models.Track, singleArtist bool) (
 			OriginalDate:              originalDate,
 			OriginalYear:              originalYear,
 			CoverURL:                  track.CoverURL,
+			CoverPath:                 track.CoverPath,
 			Genres:                    strings.Join(genres, "; "),
 			ISRCs:                     append([]string(nil), rec.ISRCs...),
 			Media:                     media,
