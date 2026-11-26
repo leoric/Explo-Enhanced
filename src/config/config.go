@@ -62,6 +62,7 @@ type ClientConfig struct {
 	PlaylistDir     string `env:"PLAYLIST_DIR"`
 	PlaylistName    string
 	PlaylistNFormat string `env:"PLAYLISTNAME_FORMAT" env-default:"week"`
+	PlaylistNames   PlaylistNames
 	MatchScore      int    `env:"TRACK_MATCH_SCORE" env-default:"60"`
 	PlaylistDescr   string
 	PlaylistID      string
@@ -71,6 +72,33 @@ type ClientConfig struct {
 	Creds           Credentials
 	AdminCreds      AdminCredentials
 	Subsonic        SubsonicConfig
+}
+
+// PlaylistNames holds optional display names per playlist type
+type PlaylistNames struct {
+	WeeklyExploration string `env:"WEEKLY_EXPLORATION_NAME"`
+	WeeklyJams        string `env:"WEEKLY_JAMS_NAME"`
+	DailyJams         string `env:"DAILY_JAMS_NAME"`
+	OnRepeat          string `env:"ON_REPEAT_NAME"`
+	FreshReleases     string `env:"FRESH_RELEASES_NAME"`
+}
+
+// ForType returns the configured name for a playlist type, or "" if none is set
+func (n PlaylistNames) ForType(playlistType string) string {
+	var name string
+	switch playlistType {
+	case "weekly-exploration":
+		name = n.WeeklyExploration
+	case "weekly-jams":
+		name = n.WeeklyJams
+	case "daily-jams":
+		name = n.DailyJams
+	case "on-repeat":
+		name = n.OnRepeat
+	case "fresh-releases":
+		name = n.FreshReleases
+	}
+	return strings.TrimSpace(name)
 }
 
 type Credentials struct {
@@ -327,7 +355,10 @@ func (cfg *Config) HandleDeprecation() {
 // Generate playlist name and description
 func (cfg *Config) GenPlaylistDetails() {
 
-	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist)
+	now := time.Now()
+	// the download subdirectory keeps the default name, so a custom name doesn't move files
+	defaultName := getPlaylistName(cfg.Flags.Playlist, "", cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist, now)
+	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNames.ForType(cfg.Flags.Playlist), cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist, now)
 
 	desc := fmt.Sprintf(
     "Created for %s by Explo, using ListenBrainz recommendations.",
@@ -346,21 +377,23 @@ func (cfg *Config) GenPlaylistDetails() {
 		// add playlist name to downloadDir so all songs get downloaded to a single sub directory.
 		cfg.DownloadCfg.DownloadDir = filepath.Join(
 			cfg.DownloadCfg.DownloadDir,
-			cfg.ClientCfg.PlaylistName)
+			defaultName)
 	}
 }
 
-func getPlaylistName(playlistType, format string, replace bool) string {
+// getPlaylistName builds the playlist name; base overrides the title-cased playlist type if set
+func getPlaylistName(playlistType, base, format string, replace bool, now time.Time) string {
 
-	toTitle := cases.Title(language.Und)
-	base := toTitle.String(playlistType)
+	if base == "" {
+		toTitle := cases.Title(language.Und)
+		base = toTitle.String(playlistType)
+	}
 
 	// When replacing or for custom playlists, always use base name
 	if replace || strings.HasPrefix(playlistType, "custom-") {
 		return base
 	}
 
-	now := time.Now()
 	// Explicit date-based naming
 	if format == "date" {
 		return fmt.Sprintf(

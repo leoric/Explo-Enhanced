@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"log/slog"
+	"strings"
 
 	"explo/src/config"
 	"explo/src/models"
@@ -17,6 +18,12 @@ type MPD struct {
 
 func NewMPD(cfg config.ClientConfig) *MPD {
 	return &MPD{Cfg: cfg}
+}
+
+// playlistPath returns the .m3u path, with path separators in the playlist name replaced
+func (c *MPD) playlistPath() string {
+	name := strings.NewReplacer("/", "_", "\\", "_").Replace(c.Cfg.PlaylistName)
+	return c.Cfg.PlaylistDir + name + ".m3u"
 }
 
 func (c *MPD) GetLibrary() error {
@@ -64,7 +71,7 @@ func (c *MPD) CheckRefreshState() bool {
 }
 
 func (c *MPD) CreatePlaylist(tracks []*models.Track) error {
-	f, err := os.OpenFile(c.Cfg.PlaylistDir+c.Cfg.PlaylistName+".m3u", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
+	f, err := os.OpenFile(c.playlistPath(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return err
 	}
@@ -81,10 +88,10 @@ func (c *MPD) CreatePlaylist(tracks []*models.Track) error {
 }
 
 func (c *MPD) SearchPlaylist() error {
-	if _, err := os.Stat(c.Cfg.PlaylistDir+c.Cfg.PlaylistName+".m3u"); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(c.playlistPath()); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("did not find playlist: %s", c.Cfg.PlaylistName)
 	} else {
-		c.Cfg.PlaylistID = c.Cfg.PlaylistDir+c.Cfg.PlaylistName+".m3u"
+		c.Cfg.PlaylistID = c.playlistPath()
 		return nil
 	}
 }
