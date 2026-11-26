@@ -2,12 +2,14 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -137,20 +139,108 @@ func (c *DownloadClient) needsDownloadDir() bool {
 	return c.Cfg.Slskd.MigrateDL
 }
 
-func (c *DownloadClient) DeleteSongs() {
-	entries, err := os.ReadDir(c.Cfg.DownloadDir)
-	if err != nil {
-		slog.Error("failed to read directory", "context", err.Error())
-	}
-	for _, entry := range entries {
-		if !(entry.IsDir()) {
-			err = os.Remove(path.Join(c.Cfg.DownloadDir, entry.Name()))
+// audio extensions deleted by DeleteSongs, in addition to the configured slskd/youtube ones
+var cleanupExtensions = []string{"flac", "mp3", "m4a", "opus", "ogg", "wav", "aac"}
 
-			if err != nil {
-				slog.Error("failed to remove file", "context", err.Error())
-			}
+// DeleteSongs removes the previous run's tracks from the playlist download directory
+func (c *DownloadClient) DeleteSongs() {
+	exts := append(slices.Clone(cleanupExtensions), c.Cfg.Slskd.Filters.Extensions...)
+	exts = append(exts, c.Cfg.Youtube.FileExtension)
+
+	deleted, removedDirs, kept, err := cleanPlaylistDir(c.Cfg.RootDir, c.Cfg.DownloadDir, exts)
+	if err != nil {
+		slog.Error("failed to clean download directory", "dir", c.Cfg.DownloadDir, "context", err.Error())
+		return
+	}
+	slog.Info("cleaned download directory", "dir", c.Cfg.DownloadDir, "deleted files", deleted, "removed folders", removedDirs, "kept files", kept)
+}
+
+// cleanPlaylistDir recursively deletes audio files in dir, then removes directories left empty
+// (keeping dir itself). Symlinks and non-audio files are kept. dir must be a strict subdirectory of root.
+func cleanPlaylistDir(root, dir string, exts []string) (deleted, removedDirs, kept int, err error) {
+	dir, err = checkCleanTarget(root, dir)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	audioExts := make(map[string]struct{}, len(exts))
+	for _, ext := range exts {
+		if ext = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ext), ".")); ext != "" {
+			audioExts[ext] = struct{}{}
 		}
 	}
+
+	var dirs []string
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == dir {
+				return err
+			}
+			slog.Warn("cannot access path during cleanup", "path", p, "context", err.Error())
+			return nil
+		}
+
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(p), "."))
+		_, isAudio := audioExts[ext]
+
+		switch {
+		case d.IsDir():
+			if p != dir {
+				dirs = append(dirs, p)
+			}
+		case d.Type()&fs.ModeSymlink != 0:
+			slog.Debug("keeping symlink", "path", p)
+			kept++
+		case !d.Type().IsRegular() || !isAudio:
+			slog.Debug("keeping non-audio file", "path", p)
+			kept++
+		default:
+			if err := os.Remove(p); err != nil {
+				slog.Error("failed to remove file", "path", p, "context", err.Error())
+				kept++
+			} else {
+				deleted++
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		if errors.Is(walkErr, fs.ErrNotExist) {
+			return 0, 0, 0, nil // nothing downloaded yet
+		}
+		return deleted, removedDirs, kept, walkErr
+	}
+
+	// WalkDir visits parents before children, so reverse order removes the deepest directories first
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := os.Remove(dirs[i]); err != nil {
+			slog.Debug("keeping directory", "path", dirs[i], "context", err.Error())
+			continue
+		}
+		removedDirs++
+	}
+	return deleted, removedDirs, kept, nil
+}
+
+// checkCleanTarget returns the absolute path of dir if it is a strict subdirectory of root
+func checkCleanTarget(root, dir string) (string, error) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("download directory is not set")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, absDir)
+	if err != nil || absDir == string(filepath.Separator) || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing to clean %s: not a subdirectory of %s", absDir, absRoot)
+	}
+	return absDir, nil
 }
 
 func filterLocalTracks(tracks *[]*models.Track, preDownload bool) { // filter local tracks

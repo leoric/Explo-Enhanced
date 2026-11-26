@@ -95,6 +95,7 @@ type SubsonicConfig struct {
 
 type DownloadConfig struct {
 	DownloadDir       string   `env:"DOWNLOAD_DIR" env-default:"/data/"`
+	RootDir           string   // DOWNLOAD_DIR before the playlist subdirectory is appended
 	PathTemplate	  string   `env:"PATH_TEMPLATE"`
 	Youtube           Youtube
 	YoutubeMusic      YoutubeMusic
@@ -340,6 +341,7 @@ func (cfg *Config) GenPlaylistDetails() {
 
 	cfg.ClientCfg.PlaylistDescr = desc
 
+	cfg.DownloadCfg.RootDir = cfg.DownloadCfg.DownloadDir
 	if cfg.DownloadCfg.UseSubDir {
 		// add playlist name to downloadDir so all songs get downloaded to a single sub directory.
 		cfg.DownloadCfg.DownloadDir = filepath.Join(
