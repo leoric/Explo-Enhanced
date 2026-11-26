@@ -368,14 +368,23 @@ func buildTrackPath(template string, track *models.Track) (string, error) {
 	return cleanPath, nil
 }
 
-func overwriteMetadata(metadata []string, srcFile string) error {
+// overwriteMetadata rewrites srcFile's tags with metadata (if any) and, if coverPath is set,
+// replaces its embedded cover with that image
+func overwriteMetadata(metadata []string, coverPath, srcFile string) error {
 	opts := ffmpeg.KwArgs{
 			"c": "copy",
-			"metadata": metadata,
 			"loglevel": "error",
+		}
+		if len(metadata) > 0 {
+			opts["metadata"] = metadata
 		}
 		streams := []*ffmpeg.Stream{
     		ffmpeg.Input(srcFile),
+		}
+		if coverPath != "" { // map only the audio, dropping any old cover, plus the new picture
+			streams = []*ffmpeg.Stream{ffmpeg.Input(srcFile).Audio(), ffmpeg.Input(coverPath).Video()}
+			opts["disposition:v:0"] = "attached_pic"
+			opts["metadata:s:v"] = []string{"title=Album cover", "comment=Cover (front)"}
 		}
 
 		tmpFile := tempAudioFile(srcFile)

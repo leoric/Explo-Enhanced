@@ -125,8 +125,10 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 
 	ct := make([]cachedTrack, len(tracks))
 	for i, t := range tracks {
+		// keep the track's remote CoverURL intact, downloaders use it for embedding covers
+		coverURL := t.CoverURL
 		if t.CoverPath == "" {
-			t.CoverURL, t.CoverPath = util.DownloadCover(t.CoverURL, coversDir)
+			coverURL, t.CoverPath = util.DownloadCover(t.CoverURL, coversDir)
 		}
 		var inLibrary *bool
 		if added != nil {
@@ -138,7 +140,7 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 			Title:     t.CleanTitle,
 			Artist:    t.Artist,
 			Release:   t.Album,
-			CoverURL:  t.CoverURL,
+			CoverURL:  coverURL,
 			CoverPath: t.CoverPath,
 			InLibrary: inLibrary,
 		}

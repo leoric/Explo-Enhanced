@@ -175,6 +175,7 @@ type Slskd struct {
 	RenameTrack       bool   `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format (will be deprecated)
 	PathTemplate	  string `env:"PATH_TEMPLATE"`
 	OverwriteMetadata bool   `env:"SLSKD_OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
+	EmbedCoverArt     bool   `env:"EMBED_COVER_ART" env-default:"false"`          // embed cover art when migrating downloads
 	KeepPermissions   bool   `env:"SLSKD_KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	Timeout           int    `env:"SLSKD_TIMEOUT" env-default:"20"`
 	Filters           Filters

@@ -581,9 +581,27 @@ func (c *Slskd) MoveDownload(srcDir, destDir, trackPath string, track *models.Tr
 		track.File = getFilename(track.CleanTitle, track.MainArtist) + filepath.Ext(track.File)
 	}
 	srcFile := filepath.Join(trackDir, track.File)
+	var metadata []string
 	if c.Cfg.OverwriteMetadata {
-		metadata := util.BuildffmpegMetadata(*track)
-		if err := overwriteMetadata(metadata, srcFile); err != nil {
+		metadata = util.BuildffmpegMetadata(*track)
+	}
+	var coverPath string
+	if c.Cfg.EmbedCoverArt { // existing covers are only replaced when overwriting metadata
+		var removeCover func()
+		coverPath, removeCover = coverToEmbed(c.HttpClient.Client, srcFile, track, c.Cfg.OverwriteMetadata)
+		defer removeCover()
+	}
+	if c.Cfg.OverwriteMetadata || coverPath != "" {
+		err := overwriteMetadata(metadata, coverPath, srcFile)
+		if err != nil && coverPath != "" {
+			slog.Warn("failed to embed cover art", "file", srcFile, "msg", err.Error())
+			if c.Cfg.OverwriteMetadata { // still write the tags
+				err = overwriteMetadata(metadata, "", srcFile)
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
 			slog.Warn("problem overwriting metadata", "msg", err.Error())
 		}
 	}
