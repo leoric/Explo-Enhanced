@@ -585,15 +585,18 @@ func (c *Slskd) MoveDownload(srcDir, destDir, trackPath string, track *models.Tr
 	if c.Cfg.OverwriteMetadata {
 		metadata = util.BuildffmpegMetadata(*track)
 	}
+	if c.Cfg.WriteReplayGain {
+		metadata = append(metadata, replayGainTags(srcFile)...)
+	}
 	var coverPath string
 	if c.Cfg.EmbedCoverArt { // existing covers are only replaced when overwriting metadata
 		coverPath = coverToEmbed(srcFile, track, c.Cfg.CoversDir, c.Cfg.OverwriteMetadata)
 	}
-	if c.Cfg.OverwriteMetadata || coverPath != "" {
+	if len(metadata) > 0 || coverPath != "" {
 		err := overwriteMetadata(metadata, coverPath, srcFile)
 		if err != nil && coverPath != "" {
 			slog.Warn("failed to embed cover art", "file", srcFile, "msg", err.Error())
-			if c.Cfg.OverwriteMetadata { // still write the tags
+			if len(metadata) > 0 { // still write the tags
 				err = overwriteMetadata(metadata, "", srcFile)
 			} else {
 				err = nil

@@ -179,6 +179,7 @@ type Slskd struct {
 	PathTemplate	  string `env:"PATH_TEMPLATE"`
 	OverwriteMetadata bool   `env:"SLSKD_OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
 	EmbedCoverArt     bool   `env:"EMBED_COVER_ART" env-default:"false"`          // embed cover art when migrating downloads
+	WriteReplayGain   bool   `env:"WRITE_REPLAYGAIN" env-default:"false"`         // measure and write ReplayGain track tags when migrating downloads
 	KeepPermissions   bool   `env:"SLSKD_KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	Timeout           int    `env:"SLSKD_TIMEOUT" env-default:"20"`
 	Filters           Filters
