@@ -134,3 +134,35 @@ func TestExploPlaylistNames(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestGenPlaylistDetailsDescrDate(t *testing.T) {
+	cases := []struct {
+		playlist string
+		replace  bool
+		want     bool
+	}{
+		{"weekly-exploration", true, true},
+		{"weekly-exploration", false, false},
+		{"daily-jams", false, false},
+		{"custom-abc", false, true},
+	}
+	for _, c := range cases {
+		var cfg Config
+		cfg.Flags.Playlist = c.playlist
+		cfg.ReplacePlaylist = c.replace
+		cfg.GenPlaylistDetails()
+		if cfg.ClientCfg.DescrDate != c.want {
+			t.Errorf("%s replace=%t: DescrDate = %t, want %t", c.playlist, c.replace, cfg.ClientCfg.DescrDate, c.want)
+		}
+	}
+}
+
+func TestPlaylistDescription(t *testing.T) {
+	now := time.Date(2026, 3, 7, 23, 59, 0, 0, time.Local)
+	if got := playlistDescription("Created by Explo.", true, now); got != "Updated 2026-03-07 · Created by Explo." {
+		t.Fatalf("got %q", got)
+	}
+	if got := playlistDescription("Created by Explo.", false, now); got != "Created by Explo." {
+		t.Fatalf("got %q", got)
+	}
+}

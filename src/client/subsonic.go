@@ -334,7 +334,7 @@ func (c *Subsonic) SearchPlaylist() error {
 }
 
 func (c *Subsonic) UpdatePlaylist() error {
-	reqParam := fmt.Sprintf("updatePlaylist?playlistId=%s&comment=%s&f=json&public=%t",c.Cfg.PlaylistID, url.QueryEscape(c.Cfg.PlaylistDescr), c.Cfg.PublicPlaylist)
+	reqParam := fmt.Sprintf("updatePlaylist?playlistId=%s&comment=%s&f=json&public=%t",c.Cfg.PlaylistID, url.QueryEscape(c.Cfg.Description()), c.Cfg.PublicPlaylist)
 
 	if _, err := c.subsonicRequest(reqParam); err != nil {
 		return err

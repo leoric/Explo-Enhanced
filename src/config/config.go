@@ -66,6 +66,7 @@ type ClientConfig struct {
 	PlaylistNames   PlaylistNames
 	MatchScore      int    `env:"TRACK_MATCH_SCORE" env-default:"60"`
 	PlaylistDescr   string
+	DescrDate       bool // prefix the description with the update date (playlist names without a date)
 	PlaylistID      string
 	PublicPlaylist  bool   `env:"PUBLIC_PLAYLIST" env-default:"false"`
 	Sleep           int `env:"SLEEP" env-default:"2"`
@@ -408,6 +409,7 @@ func (cfg *Config) GenPlaylistDetails() {
 	}
 
 	cfg.ClientCfg.PlaylistDescr = desc
+	cfg.ClientCfg.DescrDate = !namedByDate(cfg.Flags.Playlist, cfg.ReplacePlaylist)
 
 	cfg.DownloadCfg.RootDir = cfg.DownloadCfg.DownloadDir
 	if cfg.DownloadCfg.UseSubDir {
@@ -433,6 +435,24 @@ func (cfg *Config) ExploPlaylistNames() []string {
 	return names
 }
 
+// Description returns the playlist description, prefixed with today's date if DescrDate is set
+func (c ClientConfig) Description() string {
+	return playlistDescription(c.PlaylistDescr, c.DescrDate, time.Now())
+}
+
+func playlistDescription(base string, withDate bool, now time.Time) string {
+	if !withDate {
+		return base
+	}
+	return fmt.Sprintf("Updated %s · %s", now.Format("2006-01-02"), base)
+}
+
+// namedByDate reports whether the playlist name carries its generation date or week, i.e. it isn't
+// replaced in place and isn't a custom playlist
+func namedByDate(playlistType string, replace bool) bool {
+	return !replace && !strings.HasPrefix(playlistType, "custom-")
+}
+
 // getPlaylistName builds the playlist name; base overrides the title-cased playlist type if set
 func getPlaylistName(playlistType, base, format string, replace bool, now time.Time) string {
 
@@ -442,7 +462,7 @@ func getPlaylistName(playlistType, base, format string, replace bool, now time.T
 	}
 
 	// When replacing or for custom playlists, always use base name
-	if replace || strings.HasPrefix(playlistType, "custom-") {
+	if !namedByDate(playlistType, replace) {
 		return base
 	}
 

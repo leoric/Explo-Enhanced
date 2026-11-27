@@ -230,7 +230,7 @@ func (c *Emby) UpdatePlaylist() error {
 		"Name": "%s",
 		"Overview": "%s",
 		"ProviderIds": {}
-		}`, c.Cfg.PlaylistID, c.Cfg.PlaylistName, c.Cfg.PlaylistDescr) // the additional field has to be added, otherwise Emby returns code 500
+		}`, c.Cfg.PlaylistID, c.Cfg.PlaylistName, c.Cfg.Description()) // the additional field has to be added, otherwise Emby returns code 500
 
 	if _, err := c.HttpClient.MakeRequest("POST", c.Cfg.URL+reqParam, bytes.NewBuffer(payload), c.Cfg.Creds.Headers); err != nil {
 		return err
