@@ -55,7 +55,7 @@ func TestPickOnRepeatFillsFromFirstTier(t *testing.T) {
 		week[i].ListenCount = 6
 	}
 
-	got := pickOnRepeat([][]topRecording{month, thisMonth, week})
+	got := pickOnRepeat([][]topRecording{month, thisMonth, week}, []float64{1, 1, 1})
 	if len(got) != onRepeatSize {
 		t.Fatalf("len=%d want %d", len(got), onRepeatSize)
 	}
@@ -79,13 +79,13 @@ func TestPickOnRepeatFillsFromFirstTier(t *testing.T) {
 	}
 }
 
-func TestPickOnRepeatOrdersByBestRelativeCount(t *testing.T) {
+func TestPickOnRepeatOrdersByBestWeightedRelativeCount(t *testing.T) {
 	month := []topRecording{rec("ever", "Test Band", 40), rec("both", "Other Band", 20), rec("low", "Third Band", 10)}
 	week := []topRecording{rec("both", "Other Band", 4), rec("new", "New Band", 3)}
 
-	got := keys(pickOnRepeat([][]topRecording{month, nil, week}))
-	// both: max(20/40, 4/4) = 1; new: 3/4; low: 10/40
-	want := []string{"ever", "both", "new", "low"}
+	got := keys(pickOnRepeat([][]topRecording{month, nil, week}, []float64{0.7, 0.85, 1}))
+	// both: max(0.7*20/40, 4/4) = 1; new: 3/4; ever: 0.7*40/40; low: 0.7*10/40
+	want := []string{"both", "new", "ever", "low"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("order=%v want %v", got, want)
 	}

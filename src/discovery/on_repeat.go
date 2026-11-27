@@ -20,8 +20,16 @@ const (
 )
 
 // onRepeatRanges are the stats ranges in tier order. this_week is left out: it's thin, and
-// ListenBrainz' stats lag behind recent listens.
-var onRepeatRanges = []string{"month", "this_month", "week"}
+// ListenBrainz' stats lag behind recent listens. The weights favour recent ranges when ordering,
+// so last month's top recordings don't lead the playlist for the whole following month.
+var onRepeatRanges = []struct {
+	statsRange string
+	weight     float64
+}{
+	{"month", 0.7},
+	{"this_month", 0.85},
+	{"week", 1.0},
+}
 
 type topRecording struct {
 	ArtistName    string   `json:"artist_name"`
@@ -86,20 +94,22 @@ func mergeRecordings(recs []topRecording) []topRecording {
 }
 
 // pickOnRepeat selects the playlist from the ranges' recordings, given in tier order with
-// the first tier being the one to fill up from. It returns the recordings strongest first.
-func pickOnRepeat(tiers [][]topRecording) []topRecording {
+// the first tier being the one to fill up from, and weights[i] being tier i's ordering weight.
+// It returns the recordings strongest first.
+func pickOnRepeat(tiers [][]topRecording, weights []float64) []topRecording {
 	for i := range tiers {
 		tiers[i] = mergeRecordings(tiers[i])
 	}
 
-	// a recording's strength is its count relative to its range's top count, at its best range
+	// a recording's strength is its count relative to its range's top count, weighted by the
+	// range's recency, at its best range
 	score := make(map[string]float64)
-	for _, tier := range tiers {
+	for i, tier := range tiers {
 		if len(tier) == 0 || tier[0].ListenCount == 0 {
 			continue
 		}
 		for _, r := range tier {
-			if s := float64(r.ListenCount) / float64(tier[0].ListenCount); s > score[r.key()] {
+			if s := weights[i] * float64(r.ListenCount) / float64(tier[0].ListenCount); s > score[r.key()] {
 				score[r.key()] = s
 			}
 		}
@@ -150,15 +160,17 @@ func spreadArtists(recs []topRecording) []topRecording {
 
 func (c *ListenBrainz) getTopRecordings(user string) ([]*models.Track, error) {
 	tiers := make([][]topRecording, 0, len(onRepeatRanges))
-	for _, statsRange := range onRepeatRanges {
-		recs, err := c.fetchTopRecordings(user, statsRange, onRepeatFetch)
+	weights := make([]float64, 0, len(onRepeatRanges))
+	for _, r := range onRepeatRanges {
+		recs, err := c.fetchTopRecordings(user, r.statsRange, onRepeatFetch)
 		if err != nil {
 			return nil, fmt.Errorf("getTopRecordings(): %s", err)
 		}
 		tiers = append(tiers, recs)
+		weights = append(weights, r.weight)
 	}
 
-	recs := pickOnRepeat(tiers)
+	recs := pickOnRepeat(tiers, weights)
 	if len(recs) == 0 {
 		return nil, fmt.Errorf("no top recordings found for user %s", user)
 	}
