@@ -268,7 +268,7 @@ const PRESETS = {
   'on-repeat': {
     background: cardGradient('#e11d48', '#9f1239', '#fb7185'),
     accent: '#fb7185',
-    label: 'MONTHLY',
+    label: 'WEEKLY',
   },
   'fresh-releases': {
     background: cardGradient('#0d9488', '#14b8a6', '#5eead4'),

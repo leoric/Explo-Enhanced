@@ -179,7 +179,7 @@ var PlaylistDefs = map[string]playlistDef{
 	"weekly-exploration": {"WEEKLY_EXPLORATION", "15 00 * * 2", "--playlist weekly-exploration"},
 	"weekly-jams":        {"WEEKLY_JAMS", "30 00 * * 1", "--playlist weekly-jams"},
 	"daily-jams":         {"DAILY_JAMS", "15 01 * * *", "--playlist daily-jams"},
-	"on-repeat":          {"ON_REPEAT", "0 12 1 * *", "--playlist on-repeat"},
+	"on-repeat":          {"ON_REPEAT", "0 06 * * 3", "--playlist on-repeat"},
 	"fresh-releases":     {"FRESH_RELEASES", "30 08 * * 3", "--playlist fresh-releases"},
 }
 

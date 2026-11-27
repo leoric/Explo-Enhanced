@@ -85,7 +85,7 @@ const PLAYLISTS = [
   { value: 'weekly-exploration', name: 'Weekly Exploration', scheduleKey: 'WEEKLY_EXPLORATION_SCHEDULE', flagsKey: 'WEEKLY_EXPLORATION_FLAGS', defaultDay: 2,  defaultHour: 0,  defaultMinute: 15 },
   { value: 'weekly-jams',        name: 'Weekly Jams',        scheduleKey: 'WEEKLY_JAMS_SCHEDULE',        flagsKey: 'WEEKLY_JAMS_FLAGS',        defaultDay: 1,  defaultHour: 0,  defaultMinute: 30 },
   { value: 'daily-jams',         name: 'Daily Jams',         scheduleKey: 'DAILY_JAMS_SCHEDULE',         flagsKey: 'DAILY_JAMS_FLAGS',         defaultDay: -1, defaultHour: 1,  defaultMinute: 15 },
-  { value: 'on-repeat',          name: 'On Repeat',          scheduleKey: 'ON_REPEAT_SCHEDULE',          flagsKey: 'ON_REPEAT_FLAGS',          defaultDay: 100, defaultHour: 12, defaultMinute: 0, fixedSchedule: true },
+  { value: 'on-repeat',          name: 'On Repeat',          scheduleKey: 'ON_REPEAT_SCHEDULE',          flagsKey: 'ON_REPEAT_FLAGS',          defaultDay: 3,  defaultHour: 6,  defaultMinute: 0 },
   { value: 'fresh-releases',     name: 'Fresh Releases',     scheduleKey: 'FRESH_RELEASES_SCHEDULE',     flagsKey: 'FRESH_RELEASES_FLAGS',     defaultDay: 3,  defaultHour: 8,  defaultMinute: 30 },
 ]
 
