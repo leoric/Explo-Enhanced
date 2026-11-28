@@ -1,0 +1,29 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ffmpeg (needed by the end-to-end test)
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ffmpeg; else sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+  bundle:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: scripts/bundle-macos.sh
+      - run: ditto -c -k --keepParent target/Explo.app Explo-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Explo-macos
+          path: Explo-macos.zip

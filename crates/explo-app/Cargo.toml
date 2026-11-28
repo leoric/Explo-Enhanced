@@ -1,0 +1,21 @@
+[package]
+name = "explo"
+description = "Explo: weekly music discovery for your self-hosted library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "explo"
+path = "src/main.rs"
+
+[dependencies]
+explo-core = { path = "../explo-core" }
+serde_json = "1"
+chrono = "0.4"
+eframe = "0.31"
+
+# Native folder picker (the Linux backend needs GTK, so it's only used where it's built in)
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+rfd = "0.15"
