@@ -103,6 +103,18 @@ type ArtworkUploader interface {
 	SetPlaylistArtwork(localPath string) error
 }
 
+// InPlaceReplacer is implemented by systems that can replace a playlist's
+// songs without deleting it, which keeps its ID stable.
+type InPlaceReplacer interface {
+	ReplacesInPlace() bool
+}
+
+// KeeperFinder is implemented by systems that can list the songs the user wants to keep:
+// starred songs and songs in the user's own playlists, except smart playlists and the ones named in exclude.
+type KeeperFinder interface {
+	KeeperSongs(exclude []string) ([]models.LibrarySong, error)
+}
+
 // NewClient initializes a client and sets up authentication
 func NewClient(cfg *config.Config) (*Client, error) {
 	c := &Client{
@@ -237,6 +249,11 @@ func (c *Client) CreatePlaylist(tracks []*models.Track) error {
 	if err := c.API.SearchSongs(tracks); err != nil { // search newly added songs
 		slog.Warn("SearchSongs failed", "context", err)
 	}
+	for _, track := range tracks {
+		if !track.Present {
+			slog.Info("track not found in library, leaving it out of the playlist", "system", c.System, "title", track.CleanTitle, "artist", track.MainArtist)
+		}
+	}
 	if err := c.API.CreatePlaylist(tracks); err != nil {
 		return fmt.Errorf("[%s] failed to create playlist: %s", c.System, err.Error())
 	}
@@ -250,6 +267,9 @@ func (c *Client) CreatePlaylist(tracks []*models.Track) error {
 func (c *Client) DeletePlaylist() error {
 	if err := c.API.SearchPlaylist(); err != nil {
 		return fmt.Errorf("SearchPlaylist failed: %v", err)
+	}
+	if r, ok := c.API.(InPlaceReplacer); ok && r.ReplacesInPlace() {
+		return nil // CreatePlaylist replaces the found playlist's songs
 	}
 	if err := c.API.DeletePlaylist(); err != nil {
 		return fmt.Errorf("[%s] failed to delete playlist: %s", c.System, err.Error())

@@ -3,6 +3,7 @@ package playlist
 import (
 	"bytes"
 	"encoding/json"
+	"explo/src/config"
 	"explo/src/discovery"
 	"explo/src/models"
 	"explo/src/util"
@@ -68,24 +69,38 @@ func isValidPlaylistID(t string) bool {
 
 // ── LB fallback ──────────────────────────────────────────────────────────────
 
-func fetchOnRepeatTracks(username string) ([]PlaylistTrack, error) {
-	tracks, err := discovery.FetchTopRecordings(util.NewHttp(util.HttpClientConfig{Timeout: 30}), username)
+// coverArtSize returns COVER_ART_SIZE from the .env file (or the environment), read on each call
+// since the UI can change the file while the server runs. Playlist runs and the UI share the
+// covers cache, so both must request the same size.
+func (p *Playlist) coverArtSize() string {
+	var size string
+	if data, err := os.ReadFile(p.cfg.WebEnvPath); err == nil {
+		size = p.settings.ParseEnvText(string(data))["COVER_ART_SIZE"]
+	}
+	if size == "" {
+		size = os.Getenv("COVER_ART_SIZE")
+	}
+	return config.NormalizeCoverArtSize(size)
+}
+
+func fetchOnRepeatTracks(username, coverArtSize string) ([]PlaylistTrack, error) {
+	tracks, err := discovery.FetchTopRecordings(util.NewHttp(util.HttpClientConfig{Timeout: 30}), username, coverArtSize)
 	if err != nil {
 		return nil, err
 	}
 	return modelTracksToPlaylistTracks(tracks), nil
 }
 
-func fetchFreshReleaseTracks(username string) ([]PlaylistTrack, error) {
-	tracks, err := discovery.FetchFreshReleaseTracks(util.NewHttp(util.HttpClientConfig{Timeout: 60}), username)
+func fetchFreshReleaseTracks(username, coverArtSize string) ([]PlaylistTrack, error) {
+	tracks, err := discovery.FetchFreshReleaseTracks(util.NewHttp(util.HttpClientConfig{Timeout: 60}), username, coverArtSize)
 	if err != nil {
 		return nil, err
 	}
 	return modelTracksToPlaylistTracks(tracks), nil
 }
 
-func fetchMostRecentLBPlaylist(username, playlistType string) ([]PlaylistTrack, error) {
-	tracks, err := discovery.FetchMostRecentPlaylistByType(util.NewHttp(util.HttpClientConfig{Timeout: 30}), username, playlistType)
+func fetchMostRecentLBPlaylist(username, playlistType, coverArtSize string) ([]PlaylistTrack, error) {
+	tracks, err := discovery.FetchMostRecentPlaylistByType(util.NewHttp(util.HttpClientConfig{Timeout: 30}), username, playlistType, coverArtSize)
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +158,10 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 
 	ct := make([]cachedTrack, len(tracks))
 	for i, t := range tracks {
+		// keep the track's remote CoverURL intact, downloaders use it for embedding covers
+		coverURL := t.CoverURL
 		if t.CoverPath == "" {
-			t.CoverURL, t.CoverPath = util.DownloadCover(t.CoverURL, coversDir)
+			coverURL, t.CoverPath = util.DownloadCover(t.CoverURL, coversDir)
 		}
 		var inLibrary *bool
 		if added != nil {
@@ -156,7 +173,7 @@ func WritePlaylistCache(cfgPath, playlist string, tracks []*models.Track, added 
 			Title:     t.CleanTitle,
 			Artist:    t.Artist,
 			Release:   t.Album,
-			CoverURL:  t.CoverURL,
+			CoverURL:  coverURL,
 			CoverPath: t.CoverPath,
 			InLibrary: inLibrary,
 			MainArtist:         t.MainArtist,
@@ -312,7 +329,7 @@ func randomLocalCoverHiRes(coversDir string) string {
 }
 
 // fetchSitewideCovers downloads cover art for the top global LB albums and
-// returns a "/api/covers/<mbid>.jpg" URL for the first one that meets the
+// returns a "/api/covers/<mbid>-bg.jpg" URL for the first one that meets the
 // minimum resolution requirement (1000px).
 func fetchSitewideCovers(coversDir string) string {
 	if err := os.MkdirAll(coversDir, 0755); err != nil {
@@ -331,6 +348,12 @@ func fetchSitewideCovers(coversDir string) string {
 	for _, rel := range resp.Payload.Releases {
 		if rel.ReleaseMbid == "" {
 			continue
+		}
+		// stored as -bg like other background art, so it never stands in for a playlist cover
+		bgFile := rel.ReleaseMbid + "-bg.jpg"
+		destPath := filepath.Join(coversDir, bgFile)
+		if _, err := os.Stat(destPath); err == nil {
+			return "/api/covers/" + bgFile
 		}
 		url := "https://coverartarchive.org/release/" + rel.ReleaseMbid + "/front-1200"
 
@@ -352,12 +375,11 @@ func fetchSitewideCovers(coversDir string) string {
 			continue
 		}
 
-		destPath := filepath.Join(coversDir, rel.ReleaseMbid+".jpg")
 		if err := os.WriteFile(destPath, data, 0644); err != nil {
 			slog.Error("background-art: failed to write sitewide cover", "err", err.Error())
 			continue
 		}
-		return "/api/covers/" + rel.ReleaseMbid + ".jpg"
+		return "/api/covers/" + bgFile
 	}
 	return ""
 }

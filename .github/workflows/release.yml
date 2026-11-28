@@ -125,7 +125,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64
           build-args: |
             TARGETARCH
             VERSION=${{ github.ref_name }}
@@ -162,6 +162,10 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=dev
+            type=sha
+
+      - name: Get short commit sha
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -175,6 +179,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64
           build-args: |
             TARGETARCH
+            VERSION=dev-${{ env.SHORT_SHA }}

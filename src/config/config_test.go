@@ -1,0 +1,136 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ilyakaznacheev/cleanenv"
+)
+
+func TestGetPlaylistName(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.Local) // ISO week 48, day 330
+
+	cases := []struct {
+		name, playlist, base, format string
+		replace                      bool
+		want                         string
+	}{
+		{"default replace", "weekly-exploration", "", "week", true, "Weekly-Exploration"},
+		{"custom replace", "weekly-exploration", "Discover Weekly", "week", true, "Discover Weekly"},
+		{"default week", "weekly-exploration", "", "week", false, "Weekly-Exploration-2026-Week48"},
+		{"custom week", "weekly-exploration", "Discover Weekly", "week", false, "Discover Weekly-2026-Week48"},
+		{"default date", "weekly-jams", "", "date", false, "Weekly-Jams-2026-11-26"},
+		{"custom date", "weekly-jams", "Jams", "date", false, "Jams-2026-11-26"},
+		{"daily-jams default", "daily-jams", "", "week", false, "Daily-Jams-2026-Day330"},
+		{"daily-jams custom", "daily-jams", "Täglich", "week", false, "Täglich-2026-Day330"},
+		{"custom-* playlist", "custom-abc123", "", "week", false, "Custom-Abc123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getPlaylistName(tc.playlist, tc.base, tc.format, tc.replace, now); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlaylistNamesForType(t *testing.T) {
+	n := PlaylistNames{WeeklyExploration: " Discover Weekly ", FreshReleases: "New"}
+	if got := n.ForType("weekly-exploration"); got != "Discover Weekly" {
+		t.Fatalf("got %q", got)
+	}
+	if got := n.ForType("fresh-releases"); got != "New" {
+		t.Fatalf("got %q", got)
+	}
+	if got := n.ForType("weekly-jams"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+	if got := n.ForType("custom-abc"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGenPlaylistDetailsKeepsSubfolder(t *testing.T) {
+	var cfg Config
+	cfg.Flags.Playlist = "weekly-exploration"
+	cfg.ReplacePlaylist = true
+	cfg.ClientCfg.PlaylistNames.WeeklyExploration = "Discover Weekly"
+	cfg.DownloadCfg.DownloadDir = "/data/"
+	cfg.DownloadCfg.UseSubDir = true
+
+	cfg.GenPlaylistDetails()
+
+	if cfg.ClientCfg.PlaylistName != "Discover Weekly" {
+		t.Fatalf("PlaylistName = %q", cfg.ClientCfg.PlaylistName)
+	}
+	if cfg.DownloadCfg.DownloadDir != "/data/Weekly-Exploration" {
+		t.Fatalf("DownloadDir = %q", cfg.DownloadCfg.DownloadDir)
+	}
+	if cfg.DownloadCfg.RootDir != "/data/" {
+		t.Fatalf("RootDir = %q", cfg.DownloadCfg.RootDir)
+	}
+}
+
+func TestPlaylistNamesFromEnvFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("WEEKLY_EXPLORATION_NAME=Discover Weekly\nDAILY_JAMS_NAME='Daily Mix'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := cleanenv.ReadConfig(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ClientCfg.PlaylistNames.WeeklyExploration; got != "Discover Weekly" {
+		t.Fatalf("WeeklyExploration = %q", got)
+	}
+	if got := cfg.ClientCfg.PlaylistNames.DailyJams; got != "Daily Mix" {
+		t.Fatalf("DailyJams = %q", got)
+	}
+}
+
+func TestNormalizeCoverArtSize(t *testing.T) {
+	cases := map[string]string{
+		"250": "250", "500": "500", "1200": "1200",
+		"": "250", " 500 ": "500", "large": "250",
+		"1000": "1200", "300": "250", "600": "500", "4000": "1200", "0": "250",
+	}
+	for in, want := range cases {
+		if got := NormalizeCoverArtSize(in); got != want {
+			t.Errorf("NormalizeCoverArtSize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCommonFixesCoverArtSize(t *testing.T) {
+	var cfg Config
+	cfg.DiscoveryCfg.Listenbrainz.CoverArtSize = "1000"
+	cfg.ServerCfg.WebDataDir = "/opt/explo/config/"
+	cfg.CommonFixes()
+	if got := cfg.DiscoveryCfg.Listenbrainz.CoverArtSize; got != "1200" {
+		t.Fatalf("CoverArtSize = %q, want 1200", got)
+	}
+	if cfg.DownloadCfg.Slskd.CoversDir != "/opt/explo/config/cache/covers" || cfg.DownloadCfg.Slskd.CoversDir != cfg.DownloadCfg.Youtube.CoversDir {
+		t.Fatalf("Slskd.CoversDir = %q, want the shared covers dir", cfg.DownloadCfg.Slskd.CoversDir)
+	}
+}
+
+func TestExploPlaylistNames(t *testing.T) {
+	t.Setenv("WEEKLY_EXPLORATION_FLAGS", "--playlist weekly-exploration")
+	t.Setenv("WEEKLY_JAMS_FLAGS", "--playlist weekly-jams")
+	t.Setenv("DAILY_JAMS_FLAGS", "")
+	t.Setenv("ON_REPEAT_FLAGS", " ")
+	t.Setenv("FRESH_RELEASES_FLAGS", "")
+
+	var cfg Config
+	cfg.ClientCfg.PlaylistName = "Test Mix-2026-Week48" // current run, e.g. --replace-playlist=false
+	cfg.ClientCfg.PlaylistNames.WeeklyExploration = "Discover Weekly"
+
+	got := cfg.ExploPlaylistNames()
+	want := []string{"Test Mix-2026-Week48", "Discover Weekly", "Weekly-Jams"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

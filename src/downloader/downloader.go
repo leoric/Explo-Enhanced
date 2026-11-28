@@ -2,12 +2,14 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -153,20 +155,197 @@ func (c *DownloadClient) needsDownloadDir() bool {
 	return c.Cfg.Slskd.MigrateDL
 }
 
-func (c *DownloadClient) DeleteSongs() {
-	entries, err := os.ReadDir(c.Cfg.DownloadDir)
-	if err != nil {
-		slog.Error("failed to read directory", "context", err.Error())
-	}
-	for _, entry := range entries {
-		if !(entry.IsDir()) {
-			err = os.Remove(path.Join(c.Cfg.DownloadDir, entry.Name()))
+// audio extensions deleted by DeleteSongs, in addition to the configured slskd/youtube ones
+var cleanupExtensions = []string{"flac", "mp3", "m4a", "opus", "ogg", "wav", "aac"}
 
-			if err != nil {
-				slog.Error("failed to remove file", "context", err.Error())
-			}
+// DeleteSongs removes the previous run's tracks from the playlist download directory, as decided by rules:
+// keepers are moved to KEEPERS_DIR (keeping their path below the playlist directory), and the current run's
+// tracks are left in place
+func (c *DownloadClient) DeleteSongs(rules *CleanupRules) {
+	exts := append(slices.Clone(cleanupExtensions), c.Cfg.Slskd.Filters.Extensions...)
+	exts = append(exts, c.Cfg.Youtube.FileExtension)
+
+	plan := &cleanupPlan{action: rules.action}
+	if rules.keepers != nil {
+		plan.keepersDir = c.Cfg.KeepersDir
+	}
+	res, err := cleanPlaylistDir(c.Cfg.RootDir, c.Cfg.DownloadDir, exts, plan)
+	if err != nil {
+		slog.Error("failed to clean download directory", "dir", c.Cfg.DownloadDir, "context", err.Error())
+		return
+	}
+	slog.Info("cleaned download directory", "dir", c.Cfg.DownloadDir, "deleted files", res.deleted, "moved keepers", res.moved,
+		"left current tracks", res.left, "removed folders", res.removedDirs, "kept files", res.kept)
+}
+
+// cleanupPlan decides per audio file whether cleanup deletes, moves or leaves it
+type cleanupPlan struct {
+	keepersDir string // target of actionMove, required for moving
+	action     func(path string) (fileAction, error)
+}
+
+type cleanResult struct {
+	deleted, moved, left, removedDirs, kept int
+}
+
+// cleanPlaylistDir recursively deletes audio files in dir, then removes directories left empty
+// (keeping dir itself). Symlinks and non-audio files are kept. dir must be a strict subdirectory of root.
+// With a plan, its action decides per audio file: moved files keep their path relative to dir below
+// plan.keepersDir, files it can't decide on are left in place. Without one, every audio file is deleted.
+func cleanPlaylistDir(root, dir string, exts []string, plan *cleanupPlan) (res cleanResult, err error) {
+	dir, err = checkCleanTarget(root, dir)
+	if err != nil {
+		return res, err
+	}
+	keepersDir := ""
+	if plan != nil && plan.keepersDir != "" {
+		if keepersDir, err = checkKeepersDir(dir, plan.keepersDir); err != nil {
+			return res, err
 		}
 	}
+
+	audioExts := make(map[string]struct{}, len(exts))
+	for _, ext := range exts {
+		if ext = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ext), ".")); ext != "" {
+			audioExts[ext] = struct{}{}
+		}
+	}
+
+	var dirs []string
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == dir {
+				return err
+			}
+			slog.Warn("cannot access path during cleanup", "path", p, "context", err.Error())
+			return nil
+		}
+
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(p), "."))
+		_, isAudio := audioExts[ext]
+
+		switch {
+		case d.IsDir():
+			if p != dir {
+				dirs = append(dirs, p)
+			}
+		case d.Type()&fs.ModeSymlink != 0:
+			slog.Debug("keeping symlink", "path", p)
+			res.kept++
+		case !d.Type().IsRegular() || !isAudio:
+			slog.Debug("keeping non-audio file", "path", p)
+			res.kept++
+		default:
+			if plan != nil {
+				action, err := plan.action(p)
+				if err != nil {
+					slog.Warn("could not read track tags, leaving it in place", "path", p, "context", err.Error())
+					res.kept++
+					return nil
+				}
+				switch action {
+				case actionLeave:
+					slog.Debug("leaving track of the current run in place", "path", p)
+					res.left++
+					return nil
+				case actionMove:
+					if keepersDir != "" && moveKeeper(dir, keepersDir, p) {
+						res.moved++
+					} else {
+						res.kept++
+					}
+					return nil
+				}
+			}
+			if err := os.Remove(p); err != nil {
+				slog.Error("failed to remove file", "path", p, "context", err.Error())
+				res.kept++
+			} else {
+				res.deleted++
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		if errors.Is(walkErr, fs.ErrNotExist) {
+			return cleanResult{}, nil // nothing downloaded yet
+		}
+		return res, walkErr
+	}
+
+	// WalkDir visits parents before children, so reverse order removes the deepest directories first
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := os.Remove(dirs[i]); err != nil {
+			slog.Debug("keeping directory", "path", dirs[i], "context", err.Error())
+			continue
+		}
+		res.removedDirs++
+	}
+	return res, nil
+}
+
+// moveKeeper moves file from below dir to the same relative path below keepersDir.
+// An existing file at the target is never overwritten, the keeper then stays in place.
+func moveKeeper(dir, keepersDir, file string) bool {
+	rel, err := filepath.Rel(dir, file)
+	if err != nil {
+		slog.Warn("could not move keeper, leaving it in place", "path", file, "context", err.Error())
+		return false
+	}
+	target := filepath.Join(keepersDir, rel)
+	if _, err := os.Lstat(target); err == nil {
+		slog.Warn("keeper already exists in KEEPERS_DIR, leaving it in place", "path", file, "target", target)
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		slog.Warn("could not move keeper, leaving it in place", "path", file, "context", err.Error())
+		return false
+	}
+	if err := os.Rename(file, target); err != nil {
+		// KEEPERS_DIR on another filesystem: copy, then remove the original
+		if err := moveFile(file, target, true); err != nil {
+			if _, statErr := os.Stat(file); statErr == nil {
+				_ = os.Remove(target) // drop a partial copy, the original is still in place
+			}
+			slog.Warn("could not move keeper, leaving it in place", "path", file, "target", target, "context", err.Error())
+			return false
+		}
+	}
+	slog.Info("moved keeper", "path", file, "target", target)
+	return true
+}
+
+// checkKeepersDir returns the absolute path of keepersDir, which must be outside the cleaned dir
+func checkKeepersDir(dir, keepersDir string) (string, error) {
+	abs, err := filepath.Abs(keepersDir)
+	if err != nil {
+		return "", err
+	}
+	if rel, err := filepath.Rel(dir, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing to clean %s: KEEPERS_DIR %s is inside it", dir, abs)
+	}
+	return abs, nil
+}
+
+// checkCleanTarget returns the absolute path of dir if it is a strict subdirectory of root
+func checkCleanTarget(root, dir string) (string, error) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("download directory is not set")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, absDir)
+	if err != nil || absDir == string(filepath.Separator) || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing to clean %s: not a subdirectory of %s", absDir, absRoot)
+	}
+	return absDir, nil
 }
 
 func filterLocalTracks(tracks *[]*models.Track, preDownload bool) { // filter local tracks
@@ -294,14 +473,23 @@ func buildTrackPath(template string, track *models.Track) (string, error) {
 	return cleanPath, nil
 }
 
-func overwriteMetadata(metadata []string, srcFile string) error {
+// overwriteMetadata rewrites srcFile's tags with metadata (if any) and, if coverPath is set,
+// replaces its embedded cover with that image
+func overwriteMetadata(metadata []string, coverPath, srcFile string) error {
 	opts := ffmpeg.KwArgs{
 			"c": "copy",
-			"metadata": metadata,
 			"loglevel": "error",
+		}
+		if len(metadata) > 0 {
+			opts["metadata"] = metadata
 		}
 		streams := []*ffmpeg.Stream{
     		ffmpeg.Input(srcFile),
+		}
+		if coverPath != "" { // map only the audio, dropping any old cover, plus the new picture
+			streams = []*ffmpeg.Stream{ffmpeg.Input(srcFile).Audio(), ffmpeg.Input(coverPath).Video()}
+			opts["disposition:v:0"] = "attached_pic"
+			opts["metadata:s:v"] = []string{"title=Album cover", "comment=Cover (front)"}
 		}
 
 		tmpFile := tempAudioFile(srcFile)

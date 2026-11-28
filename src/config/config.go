@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ type ClientConfig struct {
 	PlaylistDir     string `env:"PLAYLIST_DIR"`
 	PlaylistName    string
 	PlaylistNFormat string `env:"PLAYLISTNAME_FORMAT" env-default:"week"`
+	PlaylistNames   PlaylistNames
 	MatchScore      int    `env:"TRACK_MATCH_SCORE" env-default:"60"`
 	PlaylistDescr   string
 	PlaylistID      string
@@ -71,6 +73,33 @@ type ClientConfig struct {
 	Creds           Credentials
 	AdminCreds      AdminCredentials
 	Subsonic        SubsonicConfig
+}
+
+// PlaylistNames holds optional display names per playlist type
+type PlaylistNames struct {
+	WeeklyExploration string `env:"WEEKLY_EXPLORATION_NAME"`
+	WeeklyJams        string `env:"WEEKLY_JAMS_NAME"`
+	DailyJams         string `env:"DAILY_JAMS_NAME"`
+	OnRepeat          string `env:"ON_REPEAT_NAME"`
+	FreshReleases     string `env:"FRESH_RELEASES_NAME"`
+}
+
+// ForType returns the configured name for a playlist type, or "" if none is set
+func (n PlaylistNames) ForType(playlistType string) string {
+	var name string
+	switch playlistType {
+	case "weekly-exploration":
+		name = n.WeeklyExploration
+	case "weekly-jams":
+		name = n.WeeklyJams
+	case "daily-jams":
+		name = n.DailyJams
+	case "on-repeat":
+		name = n.OnRepeat
+	case "fresh-releases":
+		name = n.FreshReleases
+	}
+	return strings.TrimSpace(name)
 }
 
 type Credentials struct {
@@ -95,6 +124,7 @@ type SubsonicConfig struct {
 
 type DownloadConfig struct {
 	DownloadDir       string   `env:"DOWNLOAD_DIR" env-default:"/data/"`
+	RootDir           string   // DOWNLOAD_DIR before the playlist subdirectory is appended
 	PathTemplate	  string   `env:"PATH_TEMPLATE"`
 	Youtube           Youtube
 	YoutubeMusic      YoutubeMusic
@@ -107,6 +137,7 @@ type DownloadConfig struct {
 	KeepPermissions   bool     `env:"KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	RenameTrack       bool     `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format
 	UseSubDir         bool     `env:"USE_SUBDIRECTORY" env-default:"true"`
+	KeepersDir        string   `env:"KEEPERS_DIR"` // --clean-downloads moves starred/playlisted tracks here instead of deleting them
 	Discovery         string   `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
 	Services          []string `env:"DOWNLOAD_SERVICES" env-default:"youtube"`
 }
@@ -144,9 +175,12 @@ type Slskd struct {
 	SlskdDir          string `env:"SLSKD_DIR" env-default:"/slskd/"`
 	MigrateDL         bool   `env:"SLSKD_MIGRATE_DOWNLOADS" env-default:"false"` // Move downloads from SlskdDir to DownloadDir
 	MigrateDLOld         bool   `env:"MIGRATE_DOWNLOADS" env-default:"false"` // Move downloads from SlskdDir to DownloadDir (Old)
+	CoversDir         string // shared cover cache, used for embedding cover art
 	RenameTrack       bool   `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format (will be deprecated)
 	PathTemplate	  string `env:"PATH_TEMPLATE"`
 	OverwriteMetadata bool   `env:"SLSKD_OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
+	EmbedCoverArt     bool   `env:"EMBED_COVER_ART" env-default:"false"`          // embed cover art when migrating downloads
+	WriteReplayGain   bool   `env:"WRITE_REPLAYGAIN" env-default:"false"`         // measure and write ReplayGain track tags when migrating downloads
 	KeepPermissions   bool   `env:"SLSKD_KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
 	Timeout           int    `env:"SLSKD_TIMEOUT" env-default:"20"`
 	Filters           Filters
@@ -253,6 +287,12 @@ func (cfg *Config) ReadEnv() {
 func (cfg *Config) CommonFixes() {
 	cfg.DownloadCfg.Youtube.FileExtension = strings.TrimPrefix(cfg.DownloadCfg.Youtube.FileExtension, ".")
 	cfg.DownloadCfg.Youtube.CoversDir = filepath.Join(filepath.Dir(cfg.ServerCfg.WebDataDir), "cache", "covers")
+	cfg.DownloadCfg.Slskd.CoversDir = cfg.DownloadCfg.Youtube.CoversDir
+	lb := &cfg.DiscoveryCfg.Listenbrainz
+	if size := NormalizeCoverArtSize(lb.CoverArtSize); size != strings.TrimSpace(lb.CoverArtSize) {
+		slog.Warn("unsupported COVER_ART_SIZE, using the nearest supported size (250, 500 or 1200)", "configured", lb.CoverArtSize, "using", size)
+		lb.CoverArtSize = size
+	}
 	cfg.ClientCfg.URL = fixBaseURL(cfg.ClientCfg.URL)
 	cfg.DownloadCfg.Slskd.URL = fixBaseURL(cfg.DownloadCfg.Slskd.URL)
 	cfg.DownloadCfg.Lidarr.URL = fixBaseURL(cfg.DownloadCfg.Lidarr.URL)
@@ -266,6 +306,32 @@ func (cfg *Config) NormalizeDir() {
 	cfg.DownloadCfg.Slskd.SlskdDir = fixDir(cfg.DownloadCfg.Slskd.SlskdDir)
 	cfg.DownloadCfg.Lidarr.LidarrDir = fixDir(cfg.DownloadCfg.Lidarr.LidarrDir)
 	cfg.DownloadCfg.DownloadDir = fixDir(cfg.DownloadCfg.DownloadDir)
+}
+
+// coverArtSizes are the thumbnail sizes the Cover Art Archive serves. Any other size,
+// or none, returns the full-size original image, which can be tens of megabytes.
+var coverArtSizes = []int{250, 500, 1200}
+
+// NormalizeCoverArtSize maps size to the nearest supported Cover Art Archive thumbnail size (250 if unset or invalid)
+func NormalizeCoverArtSize(size string) string {
+	n, err := strconv.Atoi(strings.TrimSpace(size))
+	if err != nil {
+		return strconv.Itoa(coverArtSizes[0])
+	}
+	best := coverArtSizes[0]
+	for _, s := range coverArtSizes {
+		if abs(n-s) < abs(n-best) {
+			best = s
+		}
+	}
+	return strconv.Itoa(best)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func fixDir(dir string) string {
@@ -327,7 +393,10 @@ func (cfg *Config) HandleDeprecation() {
 // Generate playlist name and description
 func (cfg *Config) GenPlaylistDetails() {
 
-	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist)
+	now := time.Now()
+	// the download subdirectory keeps the default name, so a custom name doesn't move files
+	defaultName := getPlaylistName(cfg.Flags.Playlist, "", cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist, now)
+	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNames.ForType(cfg.Flags.Playlist), cfg.ClientCfg.PlaylistNFormat, cfg.ReplacePlaylist, now)
 
 	desc := fmt.Sprintf(
     "Created for %s by Explo, using ListenBrainz recommendations.",
@@ -341,25 +410,43 @@ func (cfg *Config) GenPlaylistDetails() {
 
 	cfg.ClientCfg.PlaylistDescr = desc
 
+	cfg.DownloadCfg.RootDir = cfg.DownloadCfg.DownloadDir
 	if cfg.DownloadCfg.UseSubDir {
 		// add playlist name to downloadDir so all songs get downloaded to a single sub directory.
 		cfg.DownloadCfg.DownloadDir = filepath.Join(
 			cfg.DownloadCfg.DownloadDir,
-			cfg.ClientCfg.PlaylistName)
+			defaultName)
 	}
 }
 
-func getPlaylistName(playlistType, format string, replace bool) string {
+// ExploPlaylistNames returns the names of the playlists Explo manages: the current run's playlist and
+// every playlist type enabled in the .env (<TYPE>_FLAGS set), named by <TYPE>_NAME or the default name
+func (cfg *Config) ExploPlaylistNames() []string {
+	names := []string{cfg.ClientCfg.PlaylistName}
+	for _, playlistType := range validPlaylists {
+		prefix := strings.ToUpper(strings.ReplaceAll(playlistType, "-", "_"))
+		if strings.TrimSpace(os.Getenv(prefix+"_FLAGS")) == "" {
+			continue
+		}
+		base := cfg.ClientCfg.PlaylistNames.ForType(playlistType)
+		names = append(names, getPlaylistName(playlistType, base, cfg.ClientCfg.PlaylistNFormat, true, time.Now()))
+	}
+	return names
+}
 
-	toTitle := cases.Title(language.Und)
-	base := toTitle.String(playlistType)
+// getPlaylistName builds the playlist name; base overrides the title-cased playlist type if set
+func getPlaylistName(playlistType, base, format string, replace bool, now time.Time) string {
+
+	if base == "" {
+		toTitle := cases.Title(language.Und)
+		base = toTitle.String(playlistType)
+	}
 
 	// When replacing or for custom playlists, always use base name
 	if replace || strings.HasPrefix(playlistType, "custom-") {
 		return base
 	}
 
-	now := time.Now()
 	// Explicit date-based naming
 	if format == "date" {
 		return fmt.Sprintf(

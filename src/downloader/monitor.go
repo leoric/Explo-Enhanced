@@ -16,6 +16,18 @@ type Monitor interface {
 	Cleanup(models.Track, string) error
 }
 
+// Retrier is implemented by downloaders that can try another source for a track.
+type Retrier interface {
+	// RetryNext queues the next candidate for track. It returns false when none is left.
+	// reason describes why the previous attempt failed, for logging.
+	RetryNext(track *models.Track, reason string) (bool, error)
+}
+
+// trackKey identifies a track across download attempts
+func trackKey(track *models.Track) string {
+	return fmt.Sprintf("%s|%s", track.ID, track.CleanTitle)
+}
+
 type MonitorConfig struct {
 	CheckInterval   time.Duration
 	StallDuration time.Duration
@@ -61,7 +73,7 @@ func (c *DownloadClient) MonitorDownloads(tracks []*models.Track, m Monitor) err
 
 		for _, track := range tracks {
 
-			key := fmt.Sprintf("%s|%s", track.ID, track.CleanTitle)
+			key := trackKey(track)
 
 			if track.Present || track.ID == "" || (progressMap[key] != nil && progressMap[key].Skipped) {
 				continue
@@ -78,18 +90,21 @@ func (c *DownloadClient) MonitorDownloads(tracks []*models.Track, m Monitor) err
 			}
 			fileStatus, exists := statuses[track.ID]
 			tracker := progressMap[key]
+			stallTime := currentTime.Sub(tracker.LastUpdated)
+			monitoredTime := currentTime.Sub(tracker.StartedAt)
+
 			if !exists {
 				tracker.Counter++
 				if tracker.Counter >= 2 {
+					if monitoredTime <= monCfg.MaxDuration && tryNextCandidate(m, track, tracker, currentTime, "missing from queue") {
+						continue
+					}
 					slog.Info("[monitor] track not found in queue after retries, skipping", "service", monCfg.Service,"track title", track.CleanTitle, "track artist", track.MainArtist)
 					tracker.Skipped = true
 				}
 				continue
 			} 
 			tracker.Counter = 0
-
-			stallTime := currentTime.Sub(tracker.LastUpdated)
-			monitoredTime := currentTime.Sub(tracker.StartedAt)
 
 			if (fileStatus.BytesRemaining == 0 && fileStatus.BytesTransferred != 0) || fileStatus.PercentComplete == 100 || strings.Contains(fileStatus.State, "Succeeded") {		
 				track.File = fileStatus.Filename
@@ -121,30 +136,38 @@ func (c *DownloadClient) MonitorDownloads(tracks []*models.Track, m Monitor) err
 				stallTime > monCfg.StallDuration ||
 				monitoredTime > monCfg.MaxDuration {
 
+				// MaxDuration caps the total time across all attempts, so it's checked first and never retried
+				var retryReason string
 				switch {
-				case fileStatus.State == "Errored":
-					slog.Info("[monitor] download errored",
-						"service", monCfg.Service,
-						"title", track.CleanTitle,
-					)
-				case stallTime > monCfg.StallDuration:
-					slog.Info("[monitor] download stalled",
-						"service", monCfg.Service,
-						"title", track.CleanTitle,
-						"duration", stallTime,
-					)
-				default:
+				case monitoredTime > monCfg.MaxDuration:
 					slog.Info("[monitor] maximum monitor time exceeded",
 						"service", monCfg.Service,
 						"title", track.CleanTitle,
 						"duration", monitoredTime,
 					)
+				case fileStatus.State == "Errored":
+					retryReason = "errored"
+					slog.Info("[monitor] download errored",
+						"service", monCfg.Service,
+						"title", track.CleanTitle,
+					)
+				default:
+					retryReason = "stalled"
+					slog.Info("[monitor] download stalled",
+						"service", monCfg.Service,
+						"title", track.CleanTitle,
+						"duration", stallTime,
+					)
 				}
 
-				tracker.Skipped = true
+				// cancel before retrying: Cleanup uses the current transfer's user, which RetryNext replaces
 				if err = m.Cleanup(*track, fileStatus.QueueID); err != nil {
 					slog.Debug("cleanup failed", logging.RuntimeAttr(err.Error()))
 				}
+				if retryReason != "" && tryNextCandidate(m, track, tracker, currentTime, retryReason) {
+					continue
+				}
+				tracker.Skipped = true
 				continue
 			}
 		}
@@ -157,10 +180,30 @@ func (c *DownloadClient) MonitorDownloads(tracks []*models.Track, m Monitor) err
 	return nil
 }
 
+// tryNextCandidate queues the next download candidate if m supports it, and restarts stall tracking.
+// Returns false if no candidate could be queued.
+func tryNextCandidate(m Monitor, track *models.Track, tracker *DownloadMonitor, now time.Time, reason string) bool {
+	r, ok := m.(Retrier)
+	if !ok {
+		return false
+	}
+	queued, err := r.RetryNext(track, reason)
+	if err != nil {
+		slog.Warn("[monitor] failed to queue next candidate", "title", track.CleanTitle, "artist", track.MainArtist, "context", err.Error())
+	}
+	if !queued {
+		return false
+	}
+	tracker.LastBytesTransferred = 0
+	tracker.Counter = 0
+	tracker.LastUpdated = now
+	return true
+}
+
 // Checks if all tracks are processed (either downloaded or skipped)
 func tracksProcessed(tracks []*models.Track, progressMap map[string]*DownloadMonitor) bool {
 	for _, track := range tracks {
-		key := fmt.Sprintf("%s|%s", track.ID, track.CleanTitle)
+		key := trackKey(track)
 		tracker, exists := progressMap[key]
 		if !track.Present && exists && !tracker.Skipped {
 			slog.Info("[monitor] track download still in progress", "title", track.CleanTitle, "artist", track.MainArtist)

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -100,6 +101,20 @@ type Slskd struct {
 	HttpClient  *util.HttpClient
 	DownloadDir string
 	Cfg         config.Slskd
+	candidates  *candidateStore
+}
+
+// candidateStore keeps the untried download candidates per track (keyed by trackKey),
+// so the monitor can fall back to the next one when a download fails
+type candidateStore struct {
+	mu     sync.Mutex
+	tracks map[string]*trackCandidates
+}
+
+type trackCandidates struct {
+	remaining   []File
+	failedUsers map[string]bool
+	total       int
 }
 
 type SearchPayload struct {
@@ -109,7 +124,8 @@ type SearchPayload struct {
 func NewSlskd(cfg config.Slskd, downloadDir string) *Slskd {
 	return &Slskd{Cfg: cfg,
 		HttpClient:  util.NewHttp(util.HttpClientConfig{Timeout: cfg.Timeout}),
-		DownloadDir: downloadDir}
+		DownloadDir: downloadDir,
+		candidates:  &candidateStore{tracks: make(map[string]*trackCandidates)}}
 }
 
 func (c *Slskd) AddHeader() {
@@ -347,28 +363,26 @@ func (c Slskd) filterFiles(files []File) ([]File, error) {
 }
 
 func (c Slskd) queueDownload(files []File, track *models.Track) error {
+	failedUsers := make(map[string]bool)
 	for i, file := range files {
-		reqParams := fmt.Sprintf("/api/v0/transfers/downloads/%s", file.Username)
-		payload := []DownloadPayload{
-			{
-				Filename: file.Name,
-				Size:     file.Size,
-			},
+		if failedUsers[file.Username] {
+			slog.Debug(fmt.Sprintf("[%d/%d] skipping candidate from user that already failed", i+1, len(files)), "user", file.Username, "title", track.CleanTitle)
+			continue
 		}
 
-		DLpayload, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("failed to marshal payload: %s", err.Error())
-		}
-
-		_, err = c.HttpClient.MakeRequest("POST", c.Cfg.URL+reqParams, bytes.NewBuffer(DLpayload), c.Headers)
+		err := c.postDownload(file, track)
 		if err == nil {
-			track.MainArtistID = file.Username
-			track.Size = file.Size
-			track.File = file.Name
+			c.candidates.mu.Lock()
+			c.candidates.tracks[trackKey(track)] = &trackCandidates{
+				remaining:   files[i+1:],
+				failedUsers: failedUsers,
+				total:       len(files),
+			}
+			c.candidates.mu.Unlock()
 			return nil
 		}
 
+		failedUsers[file.Username] = true
 		slog.Warn(fmt.Sprintf("[%d/%d] failed to queue download for '%s - %s': %s", i+1, len(files), track.CleanTitle, track.Artist, err.Error()))
 		continue
 	}
@@ -378,6 +392,75 @@ func (c Slskd) queueDownload(files []File, track *models.Track) error {
 	return fmt.Errorf("couldn't download track: %s - %s", track.CleanTitle, track.Artist)
 }
 
+
+// postDownload queues file in slskd and points track at it, so GetDownloadStatus can find the transfer
+func (c Slskd) postDownload(file File, track *models.Track) error {
+	reqParams := fmt.Sprintf("/api/v0/transfers/downloads/%s", file.Username)
+	payload := []DownloadPayload{
+		{
+			Filename: file.Name,
+			Size:     file.Size,
+		},
+	}
+
+	DLpayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %s", err.Error())
+	}
+
+	if _, err = c.HttpClient.MakeRequest("POST", c.Cfg.URL+reqParams, bytes.NewBuffer(DLpayload), c.Headers); err != nil {
+		return err
+	}
+	track.MainArtistID = file.Username
+	track.Size = file.Size
+	track.File = file.Name
+	return nil
+}
+
+// RetryNext marks the current candidate's user as failed and queues the next remaining candidate
+// from another user. It returns false when no candidate is left.
+func (c *Slskd) RetryNext(track *models.Track, reason string) (bool, error) {
+	key := trackKey(track)
+
+	c.candidates.mu.Lock()
+	defer c.candidates.mu.Unlock()
+
+	tc := c.candidates.tracks[key]
+	if tc == nil {
+		return false, nil
+	}
+	tc.failedUsers[track.MainArtistID] = true
+
+	var lastErr error
+	for len(tc.remaining) > 0 {
+		file := tc.remaining[0]
+		tc.remaining = tc.remaining[1:]
+		attempt := tc.total - len(tc.remaining)
+
+		if tc.failedUsers[file.Username] {
+			slog.Debug(fmt.Sprintf("[%d/%d] skipping candidate from user that already failed", attempt, tc.total), "user", file.Username, "title", track.CleanTitle)
+			continue
+		}
+		if err := c.postDownload(file, track); err != nil {
+			tc.failedUsers[file.Username] = true
+			lastErr = err
+			slog.Warn(fmt.Sprintf("[%d/%d] failed to queue download for '%s - %s': %s", attempt, tc.total, track.CleanTitle, track.Artist, err.Error()))
+			continue
+		}
+		slog.Info("[monitor] trying next candidate",
+			"service", "slskd",
+			"title", track.CleanTitle,
+			"artist", track.MainArtist,
+			"attempt", fmt.Sprintf("%d/%d", attempt, tc.total),
+			"reason", reason,
+			"user", file.Username,
+		)
+		return true, nil
+	}
+
+	delete(c.candidates.tracks, key)
+	return false, lastErr
+}
 
 func (c *Slskd) GetDownloadStatus(tracks []*models.Track) (map[string]FileStatus, error) {
 	reqParams := "/api/v0/transfers/downloads"
@@ -415,10 +498,8 @@ func (c *Slskd) GetDownloadStatus(tracks []*models.Track) (map[string]FileStatus
 			}
 		}
 	}
-	if len(fileStatuses) != 0 {
-		return fileStatuses, nil
-	}
-	return nil, fmt.Errorf("no files found to monitor")
+	// an empty result is not an error: the monitor counts missing tracks and falls back or skips them
+	return fileStatuses, nil
 }
 
 func (c Slskd) deleteDownload(user, ID string) error {
@@ -500,9 +581,28 @@ func (c *Slskd) MoveDownload(srcDir, destDir, trackPath string, track *models.Tr
 		track.File = getFilename(track.CleanTitle, track.MainArtist) + filepath.Ext(track.File)
 	}
 	srcFile := filepath.Join(trackDir, track.File)
+	var metadata []string
 	if c.Cfg.OverwriteMetadata {
-		metadata := util.BuildffmpegMetadata(*track)
-		if err := overwriteMetadata(metadata, srcFile); err != nil {
+		metadata = util.BuildffmpegMetadata(*track)
+	}
+	if c.Cfg.WriteReplayGain {
+		metadata = append(metadata, replayGainTags(srcFile)...)
+	}
+	var coverPath string
+	if c.Cfg.EmbedCoverArt { // existing covers are only replaced when overwriting metadata
+		coverPath = coverToEmbed(srcFile, track, c.Cfg.CoversDir, c.Cfg.OverwriteMetadata)
+	}
+	if len(metadata) > 0 || coverPath != "" {
+		err := overwriteMetadata(metadata, coverPath, srcFile)
+		if err != nil && coverPath != "" {
+			slog.Warn("failed to embed cover art", "file", srcFile, "msg", err.Error())
+			if len(metadata) > 0 { // still write the tags
+				err = overwriteMetadata(metadata, "", srcFile)
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
 			slog.Warn("problem overwriting metadata", "msg", err.Error())
 		}
 	}

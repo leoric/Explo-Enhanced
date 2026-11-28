@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,6 +63,29 @@ type Playlist struct {
 	Created   time.Time `json:"created"`
 	Changed   time.Time `json:"changed"`
 	CoverArt  string    `json:"coverArt"`
+	ValidUntil string   `json:"validUntil,omitempty"` // OpenSubsonic, only set on (evaluated) smart playlists
+}
+
+type subsonicSong struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Artist        string `json:"artist"`
+	MusicBrainzID string `json:"musicBrainzId"`
+}
+
+type keeperResp struct {
+	SubsonicResponse struct {
+		Starred2 struct {
+			Song []subsonicSong `json:"song"`
+		} `json:"starred2"`
+		Playlists struct {
+			Playlist []Playlist `json:"playlist"`
+		} `json:"playlists"`
+		Playlist struct {
+			Playlist
+			Entry []subsonicSong `json:"entry"`
+		} `json:"playlist"`
+	} `json:"subsonic-response"`
 }
 
 type ScanState struct {
@@ -128,43 +152,102 @@ func (c *Subsonic) AddLibrary() error {
 func (c *Subsonic) SearchSongs(tracks []*models.Track) error {
 	for _, track := range tracks {
 		searchQuery := util.CleanSearchTitle(track.CleanTitle)
-		songs, err := c.searchSongs(searchQuery, 0)
-		if err != nil {
-			return err
-		}
 
-		// Search matches every word, so "Hukum - Thalaivar Alappara" misses a library title "Hukum".
-		if base, _, found := strings.Cut(searchQuery, " - "); len(songs) == 0 && found && strings.TrimSpace(base) != "" {
-			slog.Debug("[subsonic] retrying search without subtitle", "query", base)
-			if songs, err = c.searchSongs(strings.TrimSpace(base), 0); err != nil {
-				return err
-			}
-		}
-
-		if len(songs) == 0 && track.MusicBrainzTrackID != "" {
-			slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)
-			if songs, err = c.searchSongs(track.MusicBrainzTrackID, 0); err != nil {
-				return err
-			}
-		}
-
-		var trackMatch SearchResult
-		var ok bool
 		if track.VideoTitle != "" { // a kept video: its name is a guess, so it needs proof
-			if trackMatch, ok, err = c.matchKeptVideo(track, searchQuery, songs); err != nil {
+			if err := c.searchKeptVideo(track, searchQuery); err != nil {
 				return err
 			}
-		} else {
-			trackMatch, ok = BestMatch(track, songs, c.Cfg.MatchScore)
-		}
-		if !ok {
-			slog.Debug("no library match", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery, "results", len(songs))
 			continue
 		}
-		track.ID = trackMatch.ID
-		track.Present = true
-		slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
+
+		// most specific first: the MusicBrainz recording ID matches exactly, while a title search
+		// only returns the server's first results, which can miss the track for common titles.
+		// Title + artist narrows those results; the bare title catches differently spelled artists.
+		for _, query := range searchQueries(track, searchQuery) {
+			matched, err := c.searchSong(track, query)
+			if err != nil {
+				return err
+			}
+			if matched {
+				break
+			}
+		}
 	}
+	return nil
+}
+
+// searchQueries lists the search3 queries for a track, most specific first.
+func searchQueries(track *models.Track, title string) []string {
+	var queries []string
+	if track.MusicBrainzTrackID != "" {
+		queries = append(queries, track.MusicBrainzTrackID)
+	}
+	if artist := strings.TrimSpace(track.MainArtist); artist != "" {
+		queries = append(queries, title+" "+artist)
+	}
+	queries = append(queries, title)
+
+	// Search matches every word, so "Hukum - Thalaivar Alappara" misses a library title "Hukum".
+	if base, _, found := strings.Cut(title, " - "); found && strings.TrimSpace(base) != "" {
+		queries = append(queries, strings.TrimSpace(base))
+	}
+	return queries
+}
+
+// searchSong runs one search3 query and, on a match above the score threshold, marks track as present
+func (c *Subsonic) searchSong(track *models.Track, searchQuery string) (bool, error) {
+	songs, err := c.searchSongs(searchQuery, 0)
+	if err != nil {
+		return false, err
+	}
+	if len(songs) == 0 {
+		slog.Debug("no results returned for query", "query", searchQuery, "trackArtist", track.MainArtist, "trackAlbum", track.Album)
+		return false, nil
+	}
+	trackMatch, ok := BestMatch(track, songs, c.Cfg.MatchScore)
+	if !ok {
+		slog.Debug("failed to find match, no results returned above threshold score", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery)
+		return false, nil
+	}
+	track.ID = trackMatch.ID
+	track.Present = true
+	slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
+	return true, nil
+}
+
+// searchKeptVideo looks for the library song a kept video stands for. A video's name is only a
+// guess, so a match needs proof (see keptVideoMatch) instead of a plain score threshold.
+func (c *Subsonic) searchKeptVideo(track *models.Track, searchQuery string) error {
+	songs, err := c.searchSongs(searchQuery, 0)
+	if err != nil {
+		return err
+	}
+
+	if base, _, found := strings.Cut(searchQuery, " - "); len(songs) == 0 && found && strings.TrimSpace(base) != "" {
+		slog.Debug("[subsonic] retrying search without subtitle", "query", base)
+		if songs, err = c.searchSongs(strings.TrimSpace(base), 0); err != nil {
+			return err
+		}
+	}
+
+	if len(songs) == 0 && track.MusicBrainzTrackID != "" {
+		slog.Debug("[subsonic] using fallback MB TrackID search", "mbid", track.MusicBrainzTrackID)
+		if songs, err = c.searchSongs(track.MusicBrainzTrackID, 0); err != nil {
+			return err
+		}
+	}
+
+	trackMatch, ok, err := c.matchKeptVideo(track, searchQuery, songs)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		slog.Debug("no library match", "threshold", c.Cfg.MatchScore, "searchQuery", searchQuery, "results", len(songs))
+		return nil
+	}
+	track.ID = trackMatch.ID
+	track.Present = true
+	slog.Debug("matched track", "searchQuery", searchQuery, "matchScore", trackMatch.Score, "trackArtist", trackMatch.Artist, "trackAlbum", trackMatch.Album)
 	return nil
 }
 
@@ -282,13 +365,32 @@ func (c *Subsonic) CheckRefreshState() bool {
 	}
 }
 
+// ReplacesInPlace reports that an existing playlist's songs are replaced instead of deleting it, keeping its ID
+func (c *Subsonic) ReplacesInPlace() bool {
+	return true
+}
+
 func (c *Subsonic) CreatePlaylist(tracks []*models.Track) error {
 	var trackIDs strings.Builder
 	for _, track := range tracks { // build songID parameters
 		fmt.Fprintf(&trackIDs, "&songId=%s", track.ID)
 	}
 
-	reqParam := fmt.Sprintf("createPlaylist?name=%s%s&f=json", url.QueryEscape(c.Cfg.PlaylistName), trackIDs.String())
+	if c.Cfg.PlaylistID != "" { // replace songs of the existing playlist
+		err := c.createPlaylist("playlistId="+url.QueryEscape(c.Cfg.PlaylistID), trackIDs.String())
+		if err == nil {
+			return nil
+		}
+		slog.Warn("[subsonic] failed to replace playlist songs, creating a new playlist", "playlist", c.Cfg.PlaylistName, "id", c.Cfg.PlaylistID, "err", err.Error())
+		c.Cfg.PlaylistID = ""
+	}
+
+	return c.createPlaylist("name="+url.QueryEscape(c.Cfg.PlaylistName), trackIDs.String())
+}
+
+// createPlaylist sends createPlaylist with target (name=... or playlistId=...) and stores the returned ID
+func (c *Subsonic) createPlaylist(target, trackIDs string) error {
+	reqParam := fmt.Sprintf("createPlaylist?%s%s&f=json", target, trackIDs)
 
 	body, err := c.subsonicRequest(reqParam)
 	if err != nil {
@@ -299,8 +401,10 @@ func (c *Subsonic) CreatePlaylist(tracks []*models.Track) error {
 	if err := util.ParseResp(body, &resp); err != nil {
         return err
     }
-	
-	c.Cfg.PlaylistID = resp.SubsonicResponse.Playlist.ID
+
+	if id := resp.SubsonicResponse.Playlist.ID; id != "" {
+		c.Cfg.PlaylistID = id
+	}
 	return nil
 }
 
@@ -318,7 +422,8 @@ func (c *Subsonic) SearchPlaylist() error {
     }
 
 	for _, playlist := range resp.SubsonicResponse.Playlists.Playlist {
-		if playlist.Name == c.Cfg.PlaylistName {
+		// getPlaylists also returns other users' public playlists, only use our own
+		if playlist.Name == c.Cfg.PlaylistName && strings.EqualFold(playlist.Owner, c.Cfg.Creds.User) {
 			c.Cfg.PlaylistID = playlist.ID
 			return nil
 
@@ -337,12 +442,64 @@ func (c *Subsonic) UpdatePlaylist() error {
 }
 
 func (c *Subsonic) DeletePlaylist() error {
+	if c.Cfg.PlaylistID == "" {
+		return nil
+	}
 	reqParam := fmt.Sprintf("deletePlaylist?id=%s&f=json", c.Cfg.PlaylistID)
 
 	if _, err := c.subsonicRequest(reqParam); err != nil {
 		return err
 	}
 	return nil
+}
+
+// KeeperSongs returns the user's starred songs and the songs in their own playlists,
+// skipping smart playlists and the playlists named in exclude
+func (c *Subsonic) KeeperSongs(exclude []string) ([]models.LibrarySong, error) {
+	var starred keeperResp
+	if err := c.getKeeperResp("getStarred2?f=json", &starred); err != nil {
+		return nil, fmt.Errorf("getStarred2: %w", err)
+	}
+	songs := toLibrarySongs(starred.SubsonicResponse.Starred2.Song)
+	slog.Debug("found starred songs", "songs", len(songs))
+
+	var lists keeperResp
+	if err := c.getKeeperResp("getPlaylists?f=json", &lists); err != nil {
+		return nil, fmt.Errorf("getPlaylists: %w", err)
+	}
+	for _, p := range lists.SubsonicResponse.Playlists.Playlist {
+		// getPlaylists also returns other users' public playlists
+		if !strings.EqualFold(p.Owner, c.Cfg.Creds.User) || slices.Contains(exclude, p.Name) || p.ValidUntil != "" {
+			continue
+		}
+		var list keeperResp
+		if err := c.getKeeperResp("getPlaylist?id="+url.QueryEscape(p.ID)+"&f=json", &list); err != nil {
+			return nil, fmt.Errorf("getPlaylist %q: %w", p.Name, err)
+		}
+		if list.SubsonicResponse.Playlist.ValidUntil != "" { // smart playlist, evaluated by this request
+			continue
+		}
+		entries := list.SubsonicResponse.Playlist.Entry
+		slog.Debug("found playlist songs", "playlist", p.Name, "songs", len(entries))
+		songs = append(songs, toLibrarySongs(entries)...)
+	}
+	return songs, nil
+}
+
+func (c *Subsonic) getKeeperResp(reqParams string, resp *keeperResp) error {
+	body, err := c.subsonicRequest(reqParams)
+	if err != nil {
+		return err
+	}
+	return util.ParseResp(body, resp)
+}
+
+func toLibrarySongs(songs []subsonicSong) []models.LibrarySong {
+	out := make([]models.LibrarySong, 0, len(songs))
+	for _, s := range songs {
+		out = append(out, models.LibrarySong{RecordingID: s.MusicBrainzID, Title: s.Title, Artist: s.Artist})
+	}
+	return out
 }
 
 func (c *Subsonic) subsonicRequest(reqParams string) ([]byte, error) {

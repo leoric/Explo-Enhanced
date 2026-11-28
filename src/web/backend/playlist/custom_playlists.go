@@ -120,8 +120,9 @@ type FetchResult struct {
 
 // fetchCustomPlaylistTracks dispatches to the appropriate source fetcher.
 // This is the single point where source-specific logic lives for fetching.
-// env holds the web UI's .env values (SUFFIX_REMOVAL, YOUTUBE_PLAYLIST_LIMIT).
-func fetchCustomPlaylistTracks(p CustomPlaylist, env map[string]string) (FetchResult, error) {
+// env holds the web UI's .env values (SUFFIX_REMOVAL, YOUTUBE_PLAYLIST_LIMIT); coverArtSize is
+// the cover size (px) requested for ListenBrainz playlist art.
+func fetchCustomPlaylistTracks(p CustomPlaylist, env map[string]string, coverArtSize string) (FetchResult, error) {
 	switch p.Source {
 	case "apple_music":
 		name, art, tracks, err := fetchAppleMusicPlaylist(p.SourceURL, env["SUFFIX_REMOVAL"] == "true")
@@ -145,7 +146,7 @@ func fetchCustomPlaylistTracks(p CustomPlaylist, env map[string]string) (FetchRe
 			return FetchResult{}, fmt.Errorf("no source data for playlist %s", p.ID)
 		}
 		httpClient := util.NewHttp(util.HttpClientConfig{Timeout: 30})
-		name, modelTracks, err := discovery.FetchPlaylistByMBID(httpClient, mbid)
+		name, modelTracks, err := discovery.FetchPlaylistByMBID(httpClient, mbid, coverArtSize)
 		if err != nil {
 			return FetchResult{}, err
 		}
